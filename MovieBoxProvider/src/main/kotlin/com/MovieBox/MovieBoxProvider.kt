@@ -82,6 +82,11 @@ class MovieBoxProvider : MainAPI() {
     private val userAgent =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 
+    private fun appendQueryParam(url: String, key: String, value: String): String {
+        val sep = if (url.contains("?")) "&" else "?"
+        return "$url$sep$key=${URLEncoder.encode(value, "UTF-8")}"
+    }
+
     private fun apiHeaders(referer: String = "$mainUrl/") = mapOf(
         "accept" to "application/json",
         "accept-language" to "en-US,en;q=0.5",
@@ -376,8 +381,11 @@ class MovieBoxProvider : MainAPI() {
                     val se = seasonNode["se"]?.asInt() ?: 1
                     val maxEp = seasonNode["maxEp"]?.asInt() ?: 1
                     for (ep in 1..maxEp) {
+                        var episodeUrl = pageUrl
+                        episodeUrl = appendQueryParam(episodeUrl, "se", se.toString())
+                        episodeUrl = appendQueryParam(episodeUrl, "ep", ep.toString())
                         episodes.add(
-                            newEpisode(pageUrl) {
+                            newEpisode(episodeUrl) {
                                 this.data = "$subjectId|$safeDetailPath|$se|$ep"
                                 this.name = "S${se}E$ep"
                                 this.season = se
@@ -390,8 +398,11 @@ class MovieBoxProvider : MainAPI() {
             }
 
             if (episodes.isEmpty()) {
+                var episodeUrl = pageUrl
+                episodeUrl = appendQueryParam(episodeUrl, "se", "1")
+                episodeUrl = appendQueryParam(episodeUrl, "ep", "1")
                 episodes.add(
-                    newEpisode(pageUrl) {
+                    newEpisode(episodeUrl) {
                         this.data = "$subjectId|$safeDetailPath|1|1"
                         this.name = "Episode 1"
                         this.season = 1
@@ -433,11 +444,37 @@ class MovieBoxProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         return try {
+            val subjectId: String
+            val detailPath: String
+            val season: Int
+            val episode: Int
+
             val parts = data.split("|")
-            val subjectId = parts.getOrNull(0)?.takeIf { it.isNotBlank() } ?: return false
-            val detailPath = parts.getOrNull(1)?.takeIf { it.isNotBlank() } ?: return false
-            val season = parts.getOrNull(2)?.toIntOrNull() ?: 0
-            val episode = parts.getOrNull(3)?.toIntOrNull() ?: 0
+            if (parts.size >= 4 && parts[0].isNotBlank()) {
+                subjectId = parts[0]
+                detailPath = parts[1]
+                season = parts[2].toIntOrNull() ?: 0
+                episode = parts[3].toIntOrNull() ?: 0
+            } else {
+                // Some Cloudstream flows pass the episode URL as `data`. Support parsing from URL too.
+                val parsed = Uri.parse(data)
+                subjectId = parsed.getQueryParameter("id")
+                    ?: parsed.getQueryParameter("subjectId")
+                    ?: return false
+
+                val segs = parsed.pathSegments
+                val detailIndex = segs.indexOf("detail")
+                detailPath = when {
+                    detailIndex >= 0 && segs.size > detailIndex + 1 -> segs[detailIndex + 1]
+                    segs.isNotEmpty() -> segs.last()
+                    else -> null
+                } ?: return false
+
+                season = parsed.getQueryParameter("se")?.toIntOrNull() ?: 0
+                episode = parsed.getQueryParameter("ep")?.toIntOrNull() ?: 0
+            }
+
+            if (season <= 0 || episode <= 0) return false
 
             val downloadUrl = buildString {
                 append(apiUrl).append("/wefeed-h5api-bff/subject/download")
