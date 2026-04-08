@@ -82,6 +82,8 @@ jobs:
           cp -f build/plugins.json $GITHUB_WORKSPACE/artifacts/plugins.json
 
       - name: Push builds
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p $GITHUB_WORKSPACE/builds-branch
           cd $GITHUB_WORKSPACE/builds-branch
