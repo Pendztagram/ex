@@ -38,9 +38,6 @@ class Samehadaku : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-
-        context?.let { StarPopupHelper.showStarPopupIfNeeded(it) }
-
         if (request.name == "Episode Terbaru") {
             val document = app.get("${request.data}$page").document
 

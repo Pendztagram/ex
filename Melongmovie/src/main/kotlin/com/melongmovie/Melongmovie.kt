@@ -42,7 +42,6 @@ class Melongmovie : MainAPI() {
     page: Int,
     request: MainPageRequest
 ): HomePageResponse {
-    context?.let { StarPopupHelper.showStarPopupIfNeeded(it) }
     val safePage = if (page <= 0) 1 else page
     val url = request.data.format(safePage)
 

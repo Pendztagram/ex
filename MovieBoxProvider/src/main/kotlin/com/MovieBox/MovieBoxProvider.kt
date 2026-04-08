@@ -60,6 +60,25 @@ class MovieBoxProvider : MainAPI() {
     private val apiUrl = "https://h5-api.aoneroom.com"
     private val apiHostParam = "moviebox.ph"
 
+    /**
+     * MovieBox uses numeric `subjectType` codes.
+     * - 1: Movie
+     * - 2: Series
+     * - 7: Episodic "drama"/UGC series (still uses seasons/episodes + subject/download with se/ep)
+     *
+     * We also fall back to checking for a non-empty seasons array when available, to avoid breaking
+     * if the site introduces new episodic subject types.
+     */
+    private fun inferTvType(subjectType: Int?, seasonsNode: JsonNode? = null): TvType {
+        return when (subjectType) {
+            2, 7 -> TvType.TvSeries
+            1 -> TvType.Movie
+            else -> {
+                if (seasonsNode != null && seasonsNode.isArray && seasonsNode.size() > 0) TvType.TvSeries else TvType.Movie
+            }
+        }
+    }
+
     private val userAgent =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 
@@ -162,7 +181,6 @@ class MovieBoxProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        context?.let { StarPopupHelper.showStarPopupIfNeeded(it) }
         val mapper = jacksonObjectMapper()
 
         fun toSearchResponses(items: JsonNode): List<SearchResponse> {
@@ -183,7 +201,7 @@ class MovieBoxProvider : MainAPI() {
                         ?: item["subject"]?.get("cover")?.get("url")?.asText()
 
                 val subjectType = item["subjectType"]?.asInt() ?: item["subject"]?.get("subjectType")?.asInt() ?: 1
-                val type = if (subjectType == 2) TvType.TvSeries else TvType.Movie
+                val type = inferTvType(subjectType)
 
                 val rating = item["imdbRatingValue"]?.asText() ?: item["subject"]?.get("imdbRatingValue")?.asText()
 
@@ -273,7 +291,7 @@ class MovieBoxProvider : MainAPI() {
             val title = item["title"]?.asText() ?: return@mapNotNull null
             val posterUrl = item["cover"]?.get("url")?.asText()
             val subjectType = item["subjectType"]?.asInt() ?: 1
-            val type = if (subjectType == 2) TvType.TvSeries else TvType.Movie
+            val type = inferTvType(subjectType)
 
             newMovieSearchResponse(
                 name = title.substringBefore("["),
@@ -341,16 +359,16 @@ class MovieBoxProvider : MainAPI() {
             ?.distinctBy { it.actor.name }
             ?: emptyList()
 
+        val seasonsNode = data["resource"]?.get("seasons")
         val subjectType = subject["subjectType"]?.asInt() ?: 1
-        val type = if (subjectType == 2) TvType.TvSeries else TvType.Movie
+        val type = inferTvType(subjectType, seasonsNode)
         val score = Score.from10(subject["imdbRatingValue"]?.asText())
 
         if (type == TvType.TvSeries) {
-            val seasons = data["resource"]?.get("seasons")
             val episodes = mutableListOf<Episode>()
 
-            if (seasons != null && seasons.isArray) {
-                seasons.forEach { seasonNode ->
+            if (seasonsNode != null && seasonsNode.isArray) {
+                seasonsNode.forEach { seasonNode ->
                     val se = seasonNode["se"]?.asInt() ?: 1
                     val maxEp = seasonNode["maxEp"]?.asInt() ?: 1
                     for (ep in 1..maxEp) {

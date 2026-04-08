@@ -3,6 +3,8 @@ package com.kuramanime
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -149,6 +151,7 @@ class Kuramanime : MainAPI() {
         val episodeUrl = data.substringBefore("?")
         val referer = episodeUrl.ifBlank { "$mainUrl/" }
         val emitted = linkedSetOf<String>()
+        val jsonMapper = jacksonObjectMapper()
 
         fun extractQuality(text: String): Int? {
             return Regex("""\b(2160|1440|1080|720|576|480|360|240)\b""")
@@ -291,6 +294,63 @@ class Kuramanime : MainAPI() {
             }
         }
 
+        suspend fun fetchSecureAuthorizationToken(
+            document: Document,
+            cookieJar: Map<String, String>,
+        ): String? {
+            val refreshUrl = document.selectFirst("#refreshTokenUrl")?.attr("value")
+                ?.trim()
+                ?.ifBlank { null }
+                ?: "$mainUrl/misc/token/refresh-token"
+
+            val response = app.get(
+                refreshUrl,
+                headers = mapOf("X-Requested-With" to "XMLHttpRequest"),
+                referer = "$mainUrl/",
+                cookies = cookieJar,
+            )
+
+            val raw = response.text.trim().ifBlank { return null }
+            val fromJson = runCatching { jsonMapper.readValue<Map<String, String>>(raw)["token"] }.getOrNull()
+            if (!fromJson.isNullOrBlank()) return fromJson.trim()
+
+            return Regex(""""token"\s*:\s*"([^"]+)"""").find(raw)?.groupValues?.getOrNull(1)?.trim()
+        }
+
+        suspend fun fetchPageToken(
+            authUrl: String,
+            headers: Map<String, String>,
+            cookieJar: Map<String, String>,
+        ): String {
+            fun String.looksLikeHtml(): Boolean {
+                val trimmed = trimStart()
+                return trimmed.startsWith("<!DOCTYPE", true) || trimmed.startsWith("<html", true)
+            }
+
+            suspend fun attempt(extraHeaders: Map<String, String> = emptyMap()): String {
+                return app.get(
+                    authUrl,
+                    headers = headers + extraHeaders,
+                    // Kuramanime kadang mengembalikan HTML (homepage) kalau referer bukan root.
+                    referer = "$mainUrl/",
+                    cookies = cookieJar,
+                ).text.trim()
+            }
+
+            val first = attempt()
+            if (first.isNotBlank() && !first.looksLikeHtml()) return first
+
+            val second = attempt(
+                mapOf(
+                    "X-Requested-With" to "XMLHttpRequest",
+                    "Accept" to "text/plain,*/*",
+                )
+            )
+            if (second.isNotBlank() && !second.looksLikeHtml()) return second
+
+            throw ErrorLoadingException("Missing page token")
+        }
+
         val nativeResolved = runCatching {
             val pageResponse = app.get(episodeUrl, referer = "$mainUrl/")
             val cookieJar = linkedMapOf<String, String>()
@@ -387,19 +447,18 @@ class Kuramanime : MainAPI() {
                 .trim()
                 .ifBlank { "1" }
 
-            val pageToken = app.get(
-                buildAuthRoute(prefixAuth, authRoute),
-                headers = mapOf(
-                    "X-Fuck-ID" to "$authKey:$authToken",
-                    "X-Request-ID" to randomRequestId(),
-                    "X-Request-Index" to "0",
-                ),
-                referer = episodeUrl,
-                cookies = cookieJar,
-            ).also { mergeCookies(cookieJar, it.cookies) }
-                .text
-                .trim()
-                .ifBlank { throw ErrorLoadingException("Missing page token") }
+            val pageTokenHeaders = mapOf(
+                "X-Fuck-ID" to "$authKey:$authToken",
+                "X-Request-ID" to randomRequestId(),
+                "X-Request-Index" to "0",
+            )
+            val pageToken = fetchPageToken(
+                authUrl = buildAuthRoute(prefixAuth, authRoute),
+                headers = pageTokenHeaders,
+                cookieJar = cookieJar,
+            )
+
+            val secureAuthorization = fetchSecureAuthorizationToken(document, cookieJar) ?: SECURE_AUTHORIZATION
 
             val resolvedPage = Regex("""\d+""").find(pageNumber)?.value ?: "1"
 
@@ -420,7 +479,7 @@ class Kuramanime : MainAPI() {
 
                 val secureResponse = app.post(
                     secureUrl,
-                    data = mapOf("authorization" to SECURE_AUTHORIZATION),
+                    data = mapOf("authorization" to secureAuthorization),
                     headers = mapOf(
                         "Origin" to mainUrl,
                         "X-Requested-With" to "XMLHttpRequest",
@@ -544,7 +603,13 @@ class Kuramanime : MainAPI() {
     }
 
     private fun parseJsEnv(jsBody: String): Map<String, String> {
-        return Regex("""([A-Z_]+)\s*:\s*['"]([^'"]+)['"]""")
+        val objectStyle = Regex("""([A-Z_]+)\s*:\s*['"]([^'"]+)['"]""")
+            .findAll(jsBody)
+            .associate { it.groupValues[1] to it.groupValues[2] }
+
+        if (objectStyle.isNotEmpty()) return objectStyle
+
+        return Regex("""\b([A-Z_]+)\s*=\s*['"]([^'"]+)['"]""")
             .findAll(jsBody)
             .associate { it.groupValues[1] to it.groupValues[2] }
     }

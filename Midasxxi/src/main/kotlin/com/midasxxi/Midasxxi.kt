@@ -43,7 +43,6 @@ class Midasxxi : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        context?.let { StarPopupHelper.showStarPopupIfNeeded(it) }
         val base = request.data.trimEnd('/')
         val target = if (page <= 1) "$base/" else "$base/page/$page/"
         val req = app.get(target)

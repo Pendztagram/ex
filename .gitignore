@@ -33,3 +33,5 @@ _melolo_zip
 _melolo_apk_playstore
 _tmp_ds_all
 _tmp_melolo_chunks
+**/.tmp_*.js
+extcloud-ci4-server
