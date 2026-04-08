@@ -482,7 +482,14 @@ class MovieBoxProvider : MainAPI() {
                             type = linkType,
                         ) {
                             this.quality = quality
-                            this.headers = mapOf("Referer" to "https://videodownloader.site/")
+                            // Many CDN URLs return 403 without a `Referer`. Set both `referer` and headers
+                            // because some players only honor one of them.
+                            val ref = "https://videodownloader.site/"
+                            this.referer = ref
+                            this.headers = mapOf(
+                                "Referer" to ref,
+                                "Origin" to "https://videodownloader.site",
+                            )
                         }
                     )
                     hasAnyLinks = true
