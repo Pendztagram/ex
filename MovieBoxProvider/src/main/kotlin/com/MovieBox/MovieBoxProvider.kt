@@ -377,7 +377,8 @@ class MovieBoxProvider : MainAPI() {
                     val maxEp = seasonNode["maxEp"]?.asInt() ?: 1
                     for (ep in 1..maxEp) {
                         episodes.add(
-                            newEpisode("$subjectId|$safeDetailPath|$se|$ep") {
+                            newEpisode(pageUrl) {
+                                this.data = "$subjectId|$safeDetailPath|$se|$ep"
                                 this.name = "S${se}E$ep"
                                 this.season = se
                                 this.episode = ep
@@ -390,7 +391,8 @@ class MovieBoxProvider : MainAPI() {
 
             if (episodes.isEmpty()) {
                 episodes.add(
-                    newEpisode("$subjectId|$safeDetailPath|1|1") {
+                    newEpisode(pageUrl) {
+                        this.data = "$subjectId|$safeDetailPath|1|1"
                         this.name = "Episode 1"
                         this.season = 1
                         this.episode = 1
