@@ -10,6 +10,7 @@ import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.nicehttp.RequestBodyTypes
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.net.URLEncoder
 
 class Sflix : MainAPI() {
     override var mainUrl = "https://sflix.film"
@@ -109,7 +110,7 @@ class Sflix : MainAPI() {
         }
     }
 	
-	override suspend fun loadLinks(
+    override suspend fun loadLinks(
 		data: String,
 		isCasting: Boolean,
 		subtitleCallback: (SubtitleFile) -> Unit,
@@ -118,8 +119,12 @@ class Sflix : MainAPI() {
 		val media = parseJson<LoadData>(data)
 
 		try {
-			val referer = "$apiUrl/spa/videoPlayPage/movies/${media.detailPath}?id=${media.id}&type=/movie/detail&lang=en"
-			val streams = app.get("$apiUrl/wefeed-h5-bff/web/subject/play?subjectId=${media.id}&se=${media.season ?: 0}&ep=${media.episode ?: 0}",
+			val subjectId = media.id ?: return false
+			val season = media.season ?: 0
+			val episode = media.episode ?: 0
+
+			val referer = "$apiUrl/spa/videoPlayPage/movies/${media.detailPath}?id=$subjectId&type=/movie/detail&lang=en"
+			val streams = app.get("$apiUrl/wefeed-h5-bff/web/subject/play?subjectId=$subjectId&se=$season&ep=$episode",
 				referer = referer
 			).parsedSafe<Media>()?.data?.streams
 
@@ -152,10 +157,72 @@ class Sflix : MainAPI() {
 				return true
 			}
 
+			// Fallback: some titles (especially series) return empty `streams` on the web endpoint,
+			// but still have playable MP4 links via the h5-api "download" endpoint.
+			val detailPath = media.detailPath?.takeIf { it.isNotBlank() }
+			if (detailPath != null) {
+				val downloadUrl = buildString {
+					append("https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/download")
+					append("?subjectId=").append(URLEncoder.encode(subjectId, "UTF-8"))
+					append("&se=").append(season)
+					append("&ep=").append(episode)
+					append("&detailPath=").append(URLEncoder.encode(detailPath, "UTF-8"))
+				}
+
+				val dl = app.get(downloadUrl, headers = h5DownloadHeaders())
+					.parsedSafe<H5DownloadResponse>()?.data
+
+				val downloads = dl?.downloads.orEmpty()
+				val captions = dl?.captions.orEmpty()
+
+				var hasAnyLinks = false
+				downloads.distinctBy { it.url }.forEach { item ->
+					val streamUrl = item.url ?: return@forEach
+					val resolution = item.resolution
+					callback(
+						newExtractorLink(
+							source = this.name,
+							name = "SFLIX ${resolution ?: ""}".trim(),
+							url = streamUrl,
+							type = INFER_TYPE
+						) {
+							this.quality = resolution?.let { res ->
+								when (res) {
+									2160 -> Qualities.P2160.value
+									1440 -> Qualities.P1440.value
+									1080 -> Qualities.P1080.value
+									720 -> Qualities.P720.value
+									480 -> Qualities.P480.value
+									360 -> Qualities.P360.value
+									240 -> Qualities.P240.value
+									else -> Qualities.Unknown.value
+								}
+							} ?: Qualities.Unknown.value
+							this.headers = mapOf("Referer" to "https://videodownloader.site/")
+						}
+					)
+					hasAnyLinks = true
+				}
+
+				captions.forEach { sub ->
+					val subUrl = sub.url ?: return@forEach
+					subtitleCallback(SubtitleFile(sub.lanName ?: "", subUrl))
+				}
+
+				if (hasAnyLinks) return true
+			}
+
 		} catch (_: Exception) {}
 
 		return false
 	}
+
+	private fun h5DownloadHeaders() = mapOf(
+		"accept" to "*/*",
+		"user-agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+		"origin" to "https://videodownloader.site",
+		"referer" to "https://videodownloader.site/",
+	)
 
     data class LoadData(val id: String? = null, val season: Int? = null, val episode: Int? = null, val detailPath: String? = null)
 
@@ -170,6 +237,23 @@ class Sflix : MainAPI() {
             data class Captions(@JsonProperty("lan") val lan: String? = null, @JsonProperty("lanName") val lanName: String? = null, @JsonProperty("url") val url: String? = null)
         }
     }
+
+	data class H5DownloadResponse(@JsonProperty("data") val data: Data? = null) {
+		data class Data(
+			@JsonProperty("downloads") val downloads: ArrayList<DownloadItem>? = arrayListOf(),
+			@JsonProperty("captions") val captions: ArrayList<CaptionItem>? = arrayListOf(),
+		) {
+			data class DownloadItem(
+				@JsonProperty("url") val url: String? = null,
+				@JsonProperty("resolution") val resolution: Int? = null,
+			)
+
+			data class CaptionItem(
+				@JsonProperty("lanName") val lanName: String? = null,
+				@JsonProperty("url") val url: String? = null,
+			)
+		}
+	}
 
     data class MediaDetail(@JsonProperty("data") val data: Data? = null) {
         data class Data(
