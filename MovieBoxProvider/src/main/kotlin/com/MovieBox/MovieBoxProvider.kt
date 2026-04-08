@@ -94,8 +94,8 @@ class MovieBoxProvider : MainAPI() {
         "accept" to "*/*",
         "user-agent" to userAgent,
         "origin" to "https://videodownloader.site",
-        "referer" to "https://videodownloader.site/",
     )
+    private val downloadReferer = "https://videodownloader.site/"
 
     private val secretKeyDefault = base64Decode("NzZpUmwwN3MweFNOOWpxbUVXQXQ3OUVCSlp1bElRSXNWNjRGWnIyTw==")
     private val secretKeyAlt = base64Decode("WHFuMm5uTzQxL0w5Mm8xaXVYaFNMSFRiWHZZNFo1Wlo2Mm04bVNMQQ==")
@@ -442,7 +442,7 @@ class MovieBoxProvider : MainAPI() {
             }
 
             val mapper = jacksonObjectMapper()
-            val root = mapper.readTree(app.get(downloadUrl, headers = downloadHeaders()).text)
+            val root = mapper.readTree(app.get(downloadUrl, headers = downloadHeaders(), referer = downloadReferer).text)
             val dataNode = root["data"] ?: return false
 
             val downloads = dataNode["downloads"]
@@ -484,7 +484,7 @@ class MovieBoxProvider : MainAPI() {
                             this.quality = quality
                             // Many CDN URLs return 403 without a `Referer`. Set both `referer` and headers
                             // because some players only honor one of them.
-                            val ref = "https://videodownloader.site/"
+                            val ref = downloadReferer
                             this.referer = ref
                             this.headers = mapOf(
                                 "Referer" to ref,
