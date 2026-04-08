@@ -90,12 +90,16 @@ class MovieBoxProvider : MainAPI() {
         "referer" to referer,
     )
 
+    private val downloadReferer = "https://videodownloader.site/"
+
     private fun downloadHeaders() = mapOf(
         "accept" to "*/*",
+        "accept-language" to "en-US,en;q=0.5",
         "user-agent" to userAgent,
         "origin" to "https://videodownloader.site",
+        // Keep Referer both here and via `referer =` parameter for maximum compatibility.
+        "referer" to downloadReferer,
     )
-    private val downloadReferer = "https://videodownloader.site/"
 
     private val secretKeyDefault = base64Decode("NzZpUmwwN3MweFNOOWpxbUVXQXQ3OUVCSlp1bElRSXNWNjRGWnIyTw==")
     private val secretKeyAlt = base64Decode("WHFuMm5uTzQxL0w5Mm8xaXVYaFNMSFRiWHZZNFo1Wlo2Mm04bVNMQQ==")
@@ -442,7 +446,15 @@ class MovieBoxProvider : MainAPI() {
             }
 
             val mapper = jacksonObjectMapper()
-            val root = mapper.readTree(app.get(downloadUrl, headers = downloadHeaders(), referer = downloadReferer).text)
+            val root = mapper.readTree(
+                app.get(
+                    downloadUrl,
+                    headers = downloadHeaders(),
+                    referer = downloadReferer,
+                ).text
+            )
+
+            if (root["code"]?.asInt() != 0) return false
             val dataNode = root["data"] ?: return false
 
             val downloads = dataNode["downloads"]
