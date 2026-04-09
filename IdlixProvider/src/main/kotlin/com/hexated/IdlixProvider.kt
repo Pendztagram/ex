@@ -8,7 +8,9 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addScore
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.amap
 import com.lagradost.cloudstream3.extractors.helper.AesHelper
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.toNewSearchResponseList
 import org.jsoup.nodes.Element
@@ -21,6 +23,7 @@ class IdlixProvider : MainAPI() {
     }
     override var mainUrl = "https://z1.idlixku.com"
     private var directUrl = mainUrl
+    private val cloudflareInterceptor by lazy { CloudflareKiller() }
     override var name = "Idlix🎄"
     override val hasMainPage = true
     override var lang = "id"
@@ -34,16 +37,10 @@ class IdlixProvider : MainAPI() {
 
 
     override val mainPage = mainPageOf(
-        "$mainUrl/" to "Featured",
-        "$mainUrl/trending/page/?get=movies" to "Trending Movies",
-        "$mainUrl/trending/page/?get=tv" to "Trending TV Series",
-        "$mainUrl/movie/page/" to "Movie Terbaru",
-        "$mainUrl/tvseries/page/" to "TV Series Terbaru",
-        "$mainUrl/network/amazon/page/" to "Amazon Prime",
-        "$mainUrl/network/apple-tv/page/" to "Apple TV+ Series",
-        "$mainUrl/network/disney/page/" to "Disney+ Series",
-        "$mainUrl/network/HBO/page/" to "HBO Series",
-        "$mainUrl/network/netflix/page/" to "Netflix Series",
+        "$mainUrl/api/trending/top?limit=24&period=7d&contentType=movie" to "Trending Movies",
+        "$mainUrl/api/trending/top?limit=24&period=7d&contentType=series" to "Trending TV Series",
+        "$mainUrl/api/movies?limit=36&sort=createdAt" to "Movie Terbaru",
+        "$mainUrl/api/series?limit=36&sort=createdAt" to "TV Series Terbaru",
     )
 
     private fun getBaseUrl(url: String): String {
@@ -86,11 +83,22 @@ class IdlixProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
+        if (request.data.contains("/api/")) {
+            if (page > 1 && request.data.contains("/api/trending/top")) {
+                return newHomePageResponse(request.name, emptyList())
+            }
+            val url = getApiPageUrl(request.data, page)
+            val res = app.get(url, interceptor = cloudflareInterceptor)
+            mainUrl = getBaseUrl(res.url)
+            val home = parseApiItems(res.text).mapNotNull { it.toApiSearchResult(request.data) }
+            return newHomePageResponse(request.name, home)
+        }
+
         val nonPaged = request.name == "Featured" && page <= 1
         val req = if (nonPaged) {
-            app.get(request.data)
+            app.get(request.data, interceptor = cloudflareInterceptor)
         } else {
-            app.get(getMainPageUrl(request.data, page))
+            app.get(getMainPageUrl(request.data, page), interceptor = cloudflareInterceptor)
         }
         mainUrl = getBaseUrl(req.url)
         val document = req.document
@@ -102,6 +110,50 @@ class IdlixProvider : MainAPI() {
             it.toSearchResult()
         }
         return newHomePageResponse(request.name, home)
+    }
+
+    private fun getApiPageUrl(data: String, page: Int): String {
+        if (data.contains("/api/trending/top")) return data
+        return when {
+            data.contains(Regex("[?&]page=\\d+")) ->
+                data.replace(Regex("([?&]page=)\\d+"), "$1$page")
+            data.contains("?") -> "$data&page=$page"
+            else -> "$data?page=$page"
+        }
+    }
+
+    private fun parseApiItems(text: String): List<ApiItem> {
+        return tryParseJson<ApiListResponse>(text)?.data
+            ?: tryParseJson<List<ApiItem>>(text)
+            ?: emptyList()
+    }
+
+    private fun ApiItem.toApiSearchResult(requestData: String): SearchResponse? {
+        val resolvedTitle = title ?: name ?: return null
+        val resolvedSlug = slug ?: return null
+
+        val resolvedType = (contentType ?: type ?: "").lowercase()
+        val isSeries = resolvedType == "series" ||
+            requestData.contains("/api/series") ||
+            requestData.contains("contentType=series")
+
+        val href = if (isSeries) "$mainUrl/series/$resolvedSlug" else "$mainUrl/movie/$resolvedSlug"
+        val poster = posterPath?.let {
+            if (it.startsWith("http")) it else "https://image.tmdb.org/t/p/w342$it"
+        }
+        val q = getQualityFromString(quality)
+
+        return if (isSeries) {
+            newTvSeriesSearchResponse(resolvedTitle, href, TvType.TvSeries) {
+                this.posterUrl = poster
+                this.quality = q
+            }
+        } else {
+            newMovieSearchResponse(resolvedTitle, href, TvType.Movie) {
+                this.posterUrl = poster
+                this.quality = q
+            }
+        }
     }
 
     private fun getProperLink(uri: String): String {
@@ -143,7 +195,7 @@ class IdlixProvider : MainAPI() {
     }
 
     override suspend fun search(query: String, page: Int): SearchResponseList? {
-        val req = app.get("$mainUrl/search/$query/page/$page")
+        val req = app.get("$mainUrl/search/$query/page/$page", interceptor = cloudflareInterceptor)
         mainUrl = getBaseUrl(req.url)
         val document = req.document
         
@@ -174,7 +226,7 @@ class IdlixProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val request = app.get(url)
+        val request = app.get(url, interceptor = cloudflareInterceptor)
         directUrl = getBaseUrl(request.url)
         val document = request.document
         val title =
@@ -259,7 +311,7 @@ class IdlixProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
 
-        val document = app.get(data).document
+        val document = app.get(data, interceptor = cloudflareInterceptor).document
         document.select("ul#playeroptionsul > li").map {
                 Triple(
                     it.attr("data-post"),
@@ -273,7 +325,8 @@ class IdlixProvider : MainAPI() {
                     "action" to "doo_player_ajax", "post" to id, "nume" to nume, "type" to type
                 ),
                 referer = data,
-                headers = mapOf("Accept" to "*/*", "X-Requested-With" to "XMLHttpRequest")
+                headers = mapOf("Accept" to "*/*", "X-Requested-With" to "XMLHttpRequest"),
+                interceptor = cloudflareInterceptor
             ).parsedSafe<ResponseHash>() ?: return@amap
             val metrix = AppUtils.parseJson<AesData>(json.embed_url).m
             val password = generateKey(json.key, metrix)
@@ -322,6 +375,22 @@ class IdlixProvider : MainAPI() {
 
     data class AesData(
         @JsonProperty("m") val m: String,
+    )
+
+    data class ApiListResponse(
+        @JsonProperty("data") val data: List<ApiItem>? = null,
+    )
+
+    data class ApiItem(
+        @JsonProperty("id") val id: String? = null,
+        @JsonProperty("title") val title: String? = null,
+        @JsonProperty("name") val name: String? = null,
+        @JsonProperty("slug") val slug: String? = null,
+        @JsonProperty("posterPath") val posterPath: String? = null,
+        @JsonProperty("backdropPath") val backdropPath: String? = null,
+        @JsonProperty("quality") val quality: String? = null,
+        @JsonProperty("type") val type: String? = null,
+        @JsonProperty("contentType") val contentType: String? = null,
     )
 
 }
