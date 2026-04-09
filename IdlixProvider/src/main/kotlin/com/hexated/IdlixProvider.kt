@@ -52,16 +52,45 @@ class IdlixProvider : MainAPI() {
         }
     }
 
+    private fun getMainPageUrl(data: String, page: Int): String {
+        val (base, query) = data.split("?", limit = 2).let {
+            it.first() to it.getOrNull(1)
+        }
+
+        val uri = runCatching { URI(base) }.getOrNull()
+        val isRootPath = uri?.path.isNullOrBlank() || uri?.path == "/"
+
+        val pagedBase = if (isRootPath) {
+            base.trimEnd('/') + "/page/"
+        } else {
+            base
+        }
+
+        val normalizedBase = if (pagedBase.endsWith("/")) pagedBase else "$pagedBase/"
+        return if (query != null) {
+            "${normalizedBase}${page}/?$query"
+        } else {
+            "${normalizedBase}${page}/"
+        }
+    }
+
+    private fun inferTvTypeFromUrl(url: String): TvType {
+        val lower = url.lowercase()
+        return when {
+            lower.contains("/tvseries/") || lower.contains("/tv-series/") -> TvType.TvSeries
+            else -> TvType.Movie
+        }
+    }
+
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        val url = request.data.split("?")
         val nonPaged = request.name == "Featured" && page <= 1
         val req = if (nonPaged) {
             app.get(request.data)
         } else {
-            app.get("${url.first()}$page/?${url.lastOrNull()}")
+            app.get(getMainPageUrl(request.data, page))
         }
         mainUrl = getBaseUrl(req.url)
         val document = req.document
@@ -100,9 +129,15 @@ class IdlixProvider : MainAPI() {
         val href = getProperLink(this.selectFirst("h3 > a")!!.attr("href"))
         val posterUrl = this.select("div.poster > img").attr("src")
         val quality = getQualityFromString(this.select("span.quality").text())
-        return newMovieSearchResponse(title, href, TvType.Movie) {
-            this.posterUrl = posterUrl
-            this.quality = quality
+        return when (inferTvTypeFromUrl(href)) {
+            TvType.TvSeries -> newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
+                this.posterUrl = posterUrl
+                this.quality = quality
+            }
+            else -> newMovieSearchResponse(title, href, TvType.Movie) {
+                this.posterUrl = posterUrl
+                this.quality = quality
+            }
         }
 
     }
@@ -126,8 +161,13 @@ class IdlixProvider : MainAPI() {
                 posterUrl = posterUrl.replace(Regex("/w\\d+/"), "/w200/")
             }
 
-            newMovieSearchResponse(title, href, TvType.TvSeries) {
-                this.posterUrl = posterUrl
+            when (inferTvTypeFromUrl(href)) {
+                TvType.TvSeries -> newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
+                    this.posterUrl = posterUrl
+                }
+                else -> newMovieSearchResponse(title, href, TvType.Movie) {
+                    this.posterUrl = posterUrl
+                }
             }
         }
         return results.toNewSearchResponseList()
