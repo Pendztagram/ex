@@ -363,45 +363,68 @@ class IdlixProvider : MainAPI() {
         val contentTypes = buildList {
             add(parsed.type)
             if (parsed.type.equals("episode", true)) {
-                add("tv")
+                // Idlix sometimes expects a different contentType for episode playback.
+                addAll(listOf("tv", "series"))
             }
         }.distinct()
 
-        // Required: clearance token
-        val ts = System.currentTimeMillis()
-        val aclrRes = app.get("$mainUrl/pagead/ad_frame.js?_=$ts").text
-        val aclr = Regex("""__aclr\s*=\s*"([a-f0-9]+)"""").find(aclrRes)?.groupValues?.get(1) ?: return false
-
-        val headers = mapOf(
+        val jsonHeaders = mapOf(
             "accept" to "*/*",
             "content-type" to "application/json",
             "origin" to mainUrl,
-            "referer" to mainUrl,
             "user-agent" to USER_AGENT,
         )
+        val htmlHeaders = mapOf(
+            "accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "origin" to mainUrl,
+            "user-agent" to USER_AGENT,
+        )
+
+        Log.d("Idlix", "loadLinks id=$contentId types=$contentTypes ref=$refererUrl")
+
+        // Required: clearance token
+        val ts = System.currentTimeMillis()
+        val aclrRes = runCatching {
+            app.get(
+                "$mainUrl/pagead/ad_frame.js?_=$ts",
+                headers = htmlHeaders,
+                referer = refererUrl,
+                interceptor = cloudflareInterceptor
+            ).text
+        }.getOrNull().orEmpty()
+        val aclr = Regex("""__aclr\s*=\s*["']([0-9a-fA-F]+)["']""")
+            .find(aclrRes)?.groupValues?.get(1)
+            ?: run {
+                Log.d("Idlix", "loadLinks: failed to extract __aclr")
+                return false
+            }
 
         // warm up session (matches browser behavior)
         runCatching {
             app.get(
                 "$mainUrl/api/homepage/ads/surface/preroll",
-                headers = headers,
+                headers = htmlHeaders,
                 referer = refererUrl,
                 interceptor = cloudflareInterceptor
             )
         }
 
         val embedPath = contentTypes.firstNotNullOfOrNull { type ->
-            getEmbedPath(type, contentId, aclr, headers, refererUrl)
+            getEmbedPath(type, contentId, aclr, jsonHeaders, refererUrl)
         } ?: return false
 
         val embedUrl = if (embedPath.startsWith("http")) embedPath else "$mainUrl$embedPath"
-        val embedDoc = app.get(embedUrl, headers = headers, referer = refererUrl, interceptor = cloudflareInterceptor).document
+        Log.d("Idlix", "loadLinks: embedUrl=$embedUrl")
+        val embedDoc = app.get(embedUrl, headers = htmlHeaders, referer = refererUrl, interceptor = cloudflareInterceptor).document
         val iframeUrl = extractIframeUrl(embedDoc) ?: return false
-        val fixedFinalUrl = unwrapIframeUrl(fixUrl(iframeUrl) ?: return false, headers) ?: return false
+        Log.d("Idlix", "loadLinks: iframeUrl=$iframeUrl")
+        val fixedFinalUrl = unwrapIframeUrl(fixUrl(iframeUrl) ?: return false, htmlHeaders, refererUrl) ?: return false
+        Log.d("Idlix", "loadLinks: finalUrl=$fixedFinalUrl")
 
         return when {
             fixedFinalUrl.contains("jeniusplay", ignoreCase = true) -> {
-                Jeniusplay().getUrl(fixedFinalUrl, mainUrl, subtitleCallback, callback)
+                // Jeniusplay often expects its own-domain referer; pass null to let extractor set it.
+                Jeniusplay().getUrl(fixedFinalUrl, null, subtitleCallback, callback)
                 true
             }
             else -> {
@@ -432,13 +455,17 @@ class IdlixProvider : MainAPI() {
             }
         """.trimIndent()
 
-        val challengeRes = app.post(
+        val challengeHttp = app.post(
             "$mainUrl/api/watch/challenge",
             requestBody = challengeJson.toRequestBody("application/json".toMediaType()),
             headers = headers,
             referer = refererUrl,
             interceptor = cloudflareInterceptor
-        ).parsedSafe<ChallengeResponse>() ?: return null
+        )
+        val challengeRes = challengeHttp.parsedSafe<ChallengeResponse>() ?: run {
+            Log.d("Idlix", "watch/challenge failed type=$contentType id=$contentId")
+            return null
+        }
 
         val nonce = solvePow(challengeRes.challenge, challengeRes.difficulty)
         val solveJson = """
@@ -449,23 +476,27 @@ class IdlixProvider : MainAPI() {
             }
         """.trimIndent()
 
-        val solveRes = app.post(
+        val solveHttp = app.post(
             "$mainUrl/api/watch/solve",
             requestBody = solveJson.toRequestBody("application/json".toMediaType()),
             headers = headers,
             referer = refererUrl,
             interceptor = cloudflareInterceptor
-        ).parsedSafe<SolveResponse>() ?: return null
+        )
+        val solveRes = solveHttp.parsedSafe<SolveResponse>() ?: run {
+            Log.d("Idlix", "watch/solve failed type=$contentType id=$contentId")
+            return null
+        }
 
         return solveRes.embedUrlResolved
     }
 
-    private suspend fun unwrapIframeUrl(url: String, headers: Map<String, String>): String? {
+    private suspend fun unwrapIframeUrl(url: String, headers: Map<String, String>, refererUrl: String): String? {
         var current = url
         val base = getBaseUrl(mainUrl)
         repeat(4) {
             if (!current.startsWith(base)) return current
-            val doc = app.get(current, headers = headers, referer = mainUrl, interceptor = cloudflareInterceptor).document
+            val doc = app.get(current, headers = headers, referer = refererUrl, interceptor = cloudflareInterceptor).document
             val next = extractIframeUrl(doc) ?: return current
             current = fixUrl(next) ?: return null
         }

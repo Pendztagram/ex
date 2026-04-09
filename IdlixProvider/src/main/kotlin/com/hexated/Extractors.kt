@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
@@ -15,6 +16,7 @@ open class Jeniusplay : ExtractorApi() {
     override val name = "Jeniusplay"
     override val mainUrl = "https://jeniusplay.com"
     override val requiresReferer = true
+    private val cloudflareInterceptor by lazy { CloudflareKiller() }
 
     private fun getBaseUrl(url: String): String {
         return URI(url).let {
@@ -30,25 +32,34 @@ open class Jeniusplay : ExtractorApi() {
     ) {
         val baseUrl = getBaseUrl(url)
         val pageRef = if (url.contains("/video/")) url.substringBefore("#") else "$baseUrl/"
-        val document = app.get(url, referer = referer ?: "$baseUrl/").document
-        val hash = url.split("/").last().substringAfter("data=")
+        val document = app.get(
+            url,
+            referer = referer ?: "$baseUrl/",
+            interceptor = cloudflareInterceptor
+        ).document
+        val hash = url.split("/").last().substringAfter("data=").substringBefore("?")
 
-        val m3uLink = app.post(
-            url = "$baseUrl/player/index.php?data=$hash&do=getVideo",
+        val videoApiUrl = "$baseUrl/player/index.php?data=$hash&do=getVideo"
+        val videoApiHeaders = mapOf(
+            "X-Requested-With" to "XMLHttpRequest",
+            "Origin" to baseUrl,
+            "Referer" to pageRef
+        )
+
+        val videoText = app.post(
+            url = videoApiUrl,
             data = mapOf("hash" to hash, "r" to pageRef),
             referer = pageRef,
-            headers = mapOf(
-                "X-Requested-With" to "XMLHttpRequest",
-                "Origin" to baseUrl,
-                "Referer" to pageRef
-            )
-        ).parsed<ResponseSource>().securedLink
-            ?: app.post(
-                url = "$baseUrl/player/index.php?data=$hash&do=getVideo",
-                data = mapOf("hash" to hash, "r" to pageRef),
-                referer = pageRef,
-                headers = mapOf("X-Requested-With" to "XMLHttpRequest")
-            ).parsed<ResponseSource>().videoSource
+            headers = videoApiHeaders,
+            interceptor = cloudflareInterceptor
+        ).text
+
+        val source = tryParseJson<ResponseSource>(videoText)
+            ?: tryParseJson<ResponseWrapper>(videoText)?.data
+
+        val m3uLink = source?.securedLink?.takeIf { it.isNotBlank() }
+            ?: source?.videoSource?.takeIf { it.isNotBlank() }
+            ?: return
 
         callback.invoke(
             newExtractorLink(
@@ -92,9 +103,13 @@ open class Jeniusplay : ExtractorApi() {
     }
 
     data class ResponseSource(
-        @JsonProperty("hls") val hls: Boolean,
-        @JsonProperty("videoSource") val videoSource: String,
-        @JsonProperty("securedLink") val securedLink: String?,
+        @JsonProperty("hls") val hls: Boolean? = null,
+        @JsonProperty("videoSource") val videoSource: String? = null,
+        @JsonProperty("securedLink") val securedLink: String? = null,
+    )
+
+    data class ResponseWrapper(
+        @JsonProperty("data") val data: ResponseSource? = null,
     )
 
     data class Tracks(
