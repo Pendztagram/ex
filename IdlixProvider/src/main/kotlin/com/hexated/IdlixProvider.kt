@@ -406,11 +406,13 @@ class IdlixProvider : MainAPI() {
         ).parsedSafe<SolveResponse>() ?: return false
 
         val embedPath = solveRes.embedUrlResolved ?: return false
-        val finalUrl = app.get("$mainUrl$embedPath").document.select("iframe").attr("src")
-        val fixedFinalUrl = fixUrl(finalUrl) ?: return false
+        val embedUrl = if (embedPath.startsWith("http")) embedPath else "$mainUrl$embedPath"
+        val embedDoc = app.get(embedUrl, headers = headers, referer = mainUrl, interceptor = cloudflareInterceptor).document
+        val iframeUrl = extractIframeUrl(embedDoc) ?: return false
+        val fixedFinalUrl = unwrapIframeUrl(fixUrl(iframeUrl) ?: return false, headers) ?: return false
 
         return when {
-            fixedFinalUrl.contains("jeniusplay.com") -> {
+            fixedFinalUrl.contains("jeniusplay", ignoreCase = true) -> {
                 Jeniusplay().getUrl(fixedFinalUrl, mainUrl, subtitleCallback, callback)
                 true
             }
@@ -419,6 +421,24 @@ class IdlixProvider : MainAPI() {
                 true
             }
         }
+    }
+
+    private fun extractIframeUrl(document: org.jsoup.nodes.Document): String? {
+        val iframe = document.selectFirst("iframe[src]") ?: document.selectFirst("iframe[data-src]")
+        val src = iframe?.attr("src")?.ifBlank { iframe.attr("data-src") }?.trim()
+        return src?.takeIf { it.isNotBlank() }
+    }
+
+    private suspend fun unwrapIframeUrl(url: String, headers: Map<String, String>): String? {
+        var current = url
+        val base = getBaseUrl(mainUrl)
+        repeat(4) {
+            if (!current.startsWith(base)) return current
+            val doc = app.get(current, headers = headers, referer = mainUrl, interceptor = cloudflareInterceptor).document
+            val next = extractIframeUrl(doc) ?: return current
+            current = fixUrl(next) ?: return null
+        }
+        return current
     }
 
     private fun solvePow(challenge: String, difficulty: Int): Int {

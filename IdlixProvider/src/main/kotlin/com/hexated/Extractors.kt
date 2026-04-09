@@ -9,11 +9,18 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.getAndUnpack
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import java.net.URI
 
 open class Jeniusplay : ExtractorApi() {
     override val name = "Jeniusplay"
     override val mainUrl = "https://jeniusplay.com"
     override val requiresReferer = true
+
+    private fun getBaseUrl(url: String): String {
+        return URI(url).let {
+            "${it.scheme}://${it.host}"
+        }
+    }
 
     override suspend fun getUrl(
         url: String,
@@ -21,22 +28,23 @@ open class Jeniusplay : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val pageRef = if (url.contains("/video/")) url.substringBefore("#") else "$mainUrl/"
-        val document = app.get(url, referer = referer ?: "$mainUrl/").document
+        val baseUrl = getBaseUrl(url)
+        val pageRef = if (url.contains("/video/")) url.substringBefore("#") else "$baseUrl/"
+        val document = app.get(url, referer = referer ?: "$baseUrl/").document
         val hash = url.split("/").last().substringAfter("data=")
 
         val m3uLink = app.post(
-            url = "$mainUrl/player/index.php?data=$hash&do=getVideo",
+            url = "$baseUrl/player/index.php?data=$hash&do=getVideo",
             data = mapOf("hash" to hash, "r" to pageRef),
             referer = pageRef,
             headers = mapOf(
                 "X-Requested-With" to "XMLHttpRequest",
-                "Origin" to mainUrl,
+                "Origin" to baseUrl,
                 "Referer" to pageRef
             )
         ).parsed<ResponseSource>().securedLink
             ?: app.post(
-                url = "$mainUrl/player/index.php?data=$hash&do=getVideo",
+                url = "$baseUrl/player/index.php?data=$hash&do=getVideo",
                 data = mapOf("hash" to hash, "r" to pageRef),
                 referer = pageRef,
                 headers = mapOf("X-Requested-With" to "XMLHttpRequest")
@@ -51,7 +59,7 @@ open class Jeniusplay : ExtractorApi() {
             ) {
                 this.referer = pageRef
                 this.headers = mapOf(
-                    "Origin" to mainUrl,
+                    "Origin" to baseUrl,
                     "Referer" to pageRef,
                     "Accept" to "*/*"
                 )
