@@ -448,7 +448,7 @@
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://v17.kuramanime.ink&size=%size%",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 52972,
+        "fileSize": 50381,
         "status": 1,
         "language": "id",
         "authors": [
@@ -577,7 +577,7 @@
         "iconUrl": "https://github.com/NivinCNC/CNCVerse-Cloud-Stream-Extension/raw/refs/heads/master/MovieBoxProvider/icon.png",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 37891,
+        "fileSize": 38413,
         "status": 1,
         "language": "id",
         "authors": [
@@ -587,7 +587,7 @@
             "Movie",
             "TvSeries"
         ],
-        "version": 10,
+        "version": 11,
         "internalName": "MovieBoxProvider",
         "description": "Multi Language Movies and Series Provider",
         "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/MovieBoxProvider.cs3",
