@@ -286,7 +286,7 @@ class IdlixProvider : MainAPI() {
             detail.firstSeason?.episodes?.forEach { ep ->
                 val epId = ep.id ?: return@forEach
                 episodes.add(
-                    newEpisode(LoadData(id = epId, type = "episode").toJson()) {
+                    newEpisode(LoadData(id = epId, type = "episode", ref = url).toJson()) {
                         this.name = ep.name
                         this.season = detail.firstSeason.seasonNumber
                         this.episode = ep.episodeNumber
@@ -309,7 +309,7 @@ class IdlixProvider : MainAPI() {
                 seasonData?.episodes?.forEach { ep ->
                     val epId = ep.id ?: return@forEach
                     episodes.add(
-                        newEpisode(LoadData(id = epId, type = "episode").toJson()) {
+                        newEpisode(LoadData(id = epId, type = "episode", ref = url).toJson()) {
                             this.name = ep.name
                             this.season = seasonNum
                             this.episode = ep.episodeNumber
@@ -338,7 +338,7 @@ class IdlixProvider : MainAPI() {
         }
 
         // Movie detail
-        return newMovieLoadResponse(title, url, TvType.Movie, LoadData(id = detail.id ?: "", type = "movie").toJson()) {
+        return newMovieLoadResponse(title, url, TvType.Movie, LoadData(id = detail.id ?: "", type = "movie", ref = url).toJson()) {
             this.posterUrl = poster
             this.backgroundPosterUrl = backdrop
             this.logoUrl = logourl
@@ -359,7 +359,13 @@ class IdlixProvider : MainAPI() {
     ): Boolean {
         val parsed = tryParseJson<LoadData>(data) ?: return false
         val contentId = parsed.id
-        val contentType = parsed.type
+        val refererUrl = parsed.ref ?: mainUrl
+        val contentTypes = buildList {
+            add(parsed.type)
+            if (parsed.type.equals("episode", true)) {
+                add("tv")
+            }
+        }.distinct()
 
         // Required: clearance token
         val ts = System.currentTimeMillis()
@@ -374,40 +380,22 @@ class IdlixProvider : MainAPI() {
             "user-agent" to USER_AGENT,
         )
 
-        val challengeJson = """
-            {
-              "contentType": "$contentType",
-              "contentId": "$contentId",
-              "clearance": "$aclr"
-            }
-        """.trimIndent()
+        // warm up session (matches browser behavior)
+        runCatching {
+            app.get(
+                "$mainUrl/api/homepage/ads/surface/preroll",
+                headers = headers,
+                referer = refererUrl,
+                interceptor = cloudflareInterceptor
+            )
+        }
 
-        val challengeRes = app.post(
-            "$mainUrl/api/watch/challenge",
-            requestBody = challengeJson.toRequestBody("application/json".toMediaType()),
-            headers = headers,
-            interceptor = cloudflareInterceptor
-        ).parsedSafe<ChallengeResponse>() ?: return false
+        val embedPath = contentTypes.firstNotNullOfOrNull { type ->
+            getEmbedPath(type, contentId, aclr, headers, refererUrl)
+        } ?: return false
 
-        val nonce = solvePow(challengeRes.challenge, challengeRes.difficulty)
-        val solveJson = """
-            {
-              "challenge": "${challengeRes.challenge}",
-              "signature": "${challengeRes.signature}",
-              "nonce": $nonce
-            }
-        """.trimIndent()
-
-        val solveRes = app.post(
-            "$mainUrl/api/watch/solve",
-            requestBody = solveJson.toRequestBody("application/json".toMediaType()),
-            headers = headers,
-            interceptor = cloudflareInterceptor
-        ).parsedSafe<SolveResponse>() ?: return false
-
-        val embedPath = solveRes.embedUrlResolved ?: return false
         val embedUrl = if (embedPath.startsWith("http")) embedPath else "$mainUrl$embedPath"
-        val embedDoc = app.get(embedUrl, headers = headers, referer = mainUrl, interceptor = cloudflareInterceptor).document
+        val embedDoc = app.get(embedUrl, headers = headers, referer = refererUrl, interceptor = cloudflareInterceptor).document
         val iframeUrl = extractIframeUrl(embedDoc) ?: return false
         val fixedFinalUrl = unwrapIframeUrl(fixUrl(iframeUrl) ?: return false, headers) ?: return false
 
@@ -427,6 +415,49 @@ class IdlixProvider : MainAPI() {
         val iframe = document.selectFirst("iframe[src]") ?: document.selectFirst("iframe[data-src]")
         val src = iframe?.attr("src")?.ifBlank { iframe.attr("data-src") }?.trim()
         return src?.takeIf { it.isNotBlank() }
+    }
+
+    private suspend fun getEmbedPath(
+        contentType: String,
+        contentId: String,
+        clearance: String,
+        headers: Map<String, String>,
+        refererUrl: String,
+    ): String? {
+        val challengeJson = """
+            {
+              "contentType": "$contentType",
+              "contentId": "$contentId",
+              "clearance": "$clearance"
+            }
+        """.trimIndent()
+
+        val challengeRes = app.post(
+            "$mainUrl/api/watch/challenge",
+            requestBody = challengeJson.toRequestBody("application/json".toMediaType()),
+            headers = headers,
+            referer = refererUrl,
+            interceptor = cloudflareInterceptor
+        ).parsedSafe<ChallengeResponse>() ?: return null
+
+        val nonce = solvePow(challengeRes.challenge, challengeRes.difficulty)
+        val solveJson = """
+            {
+              "challenge": "${challengeRes.challenge}",
+              "signature": "${challengeRes.signature}",
+              "nonce": $nonce
+            }
+        """.trimIndent()
+
+        val solveRes = app.post(
+            "$mainUrl/api/watch/solve",
+            requestBody = solveJson.toRequestBody("application/json".toMediaType()),
+            headers = headers,
+            referer = refererUrl,
+            interceptor = cloudflareInterceptor
+        ).parsedSafe<SolveResponse>() ?: return null
+
+        return solveRes.embedUrlResolved
     }
 
     private suspend fun unwrapIframeUrl(url: String, headers: Map<String, String>): String? {
@@ -588,6 +619,7 @@ class IdlixProvider : MainAPI() {
     data class LoadData(
         @JsonProperty("id") val id: String,
         @JsonProperty("type") val type: String,
+        @JsonProperty("ref") val ref: String? = null,
     )
 
 }
