@@ -3,8 +3,6 @@ package com.kuramanime
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
-import com.fasterxml.jackson.module.kotlin.readValue
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -151,7 +149,6 @@ class Kuramanime : MainAPI() {
         val episodeUrl = data.substringBefore("?")
         val referer = episodeUrl.ifBlank { "$mainUrl/" }
         val emitted = linkedSetOf<String>()
-        val jsonMapper = jacksonObjectMapper()
 
         fun extractQuality(text: String): Int? {
             return Regex("""\b(2160|1440|1080|720|576|480|360|240)\b""")
@@ -292,29 +289,6 @@ class Kuramanime : MainAPI() {
                     append(alphabet[Random.nextInt(alphabet.length)])
                 }
             }
-        }
-
-        suspend fun fetchSecureAuthorizationToken(
-            document: Document,
-            cookieJar: Map<String, String>,
-        ): String? {
-            val refreshUrl = document.selectFirst("#refreshTokenUrl")?.attr("value")
-                ?.trim()
-                ?.ifBlank { null }
-                ?: "$mainUrl/misc/token/refresh-token"
-
-            val response = app.get(
-                refreshUrl,
-                headers = mapOf("X-Requested-With" to "XMLHttpRequest"),
-                referer = "$mainUrl/",
-                cookies = cookieJar,
-            )
-
-            val raw = response.text.trim().ifBlank { return null }
-            val fromJson = runCatching { jsonMapper.readValue<Map<String, String>>(raw)["token"] }.getOrNull()
-            if (!fromJson.isNullOrBlank()) return fromJson.trim()
-
-            return Regex(""""token"\s*:\s*"([^"]+)"""").find(raw)?.groupValues?.getOrNull(1)?.trim()
         }
 
         suspend fun fetchPageToken(
@@ -458,8 +432,6 @@ class Kuramanime : MainAPI() {
                 cookieJar = cookieJar,
             )
 
-            val secureAuthorization = fetchSecureAuthorizationToken(document, cookieJar) ?: SECURE_AUTHORIZATION
-
             val resolvedPage = Regex("""\d+""").find(pageNumber)?.value ?: "1"
 
             serverOptions.forEach { server ->
@@ -479,7 +451,7 @@ class Kuramanime : MainAPI() {
 
                 val secureResponse = app.post(
                     secureUrl,
-                    data = mapOf("authorization" to secureAuthorization),
+                    data = mapOf("authorization" to LEVIATHAN_AUTHORIZATION),
                     headers = mapOf(
                         "Origin" to mainUrl,
                         "X-Requested-With" to "XMLHttpRequest",
@@ -624,7 +596,7 @@ class Kuramanime : MainAPI() {
     }
 
     private companion object {
-        const val SECURE_AUTHORIZATION = "qDBDmoKgQIdP6wmFGUCDo3vuVg9FBfV98"
+        const val LEVIATHAN_AUTHORIZATION = "kJuHHkaqcBFXiGMHQf6bJw8YAyDcwGD8Ur"
     }
 
     private data class ServerOption(
