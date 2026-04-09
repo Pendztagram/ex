@@ -93,6 +93,11 @@ class IdlixProvider : MainAPI() {
         return path.trimEnd('/').substringAfterLast('/').trim()
     }
 
+    private fun fixUrl(url: String?): String? {
+        if (url.isNullOrBlank()) return null
+        return if (url.startsWith("/")) "$mainUrl$url" else url
+    }
+
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
@@ -258,12 +263,22 @@ class IdlixProvider : MainAPI() {
             val tags = detail.genres?.mapNotNull { it.name }.orEmpty()
             val trailer = detail.trailerUrl
 
-            val seasons = detail.seasons?.mapNotNull { it.seasonNumberResolved }.orEmpty()
+            val seasonsFromDetail = detail.seasons?.mapNotNull { it.seasonNumberResolved }.orEmpty()
+            val seasons = if (seasonsFromDetail.isNotEmpty()) {
+                seasonsFromDetail.distinct()
+            } else {
+                // Some responses don't include seasons list, so probe sequentially.
+                (1..30).toList()
+            }
+
             val seasonDetails = seasons.amap { seasonNumber ->
-                val sRes = app.get("$mainUrl/api/series/$slug/season/$seasonNumber", interceptor = cloudflareInterceptor)
-                sRes.parsedSafe<ApiSeasonDetail>()
-                    ?: sRes.parsedSafe<ApiData<ApiSeasonDetail>>()?.data
+                runCatching {
+                    val sRes = app.get("$mainUrl/api/series/$slug/season/$seasonNumber", interceptor = cloudflareInterceptor)
+                    sRes.parsedSafe<ApiSeasonDetail>()
+                        ?: sRes.parsedSafe<ApiData<ApiSeasonDetail>>()?.data
+                }.getOrNull()
             }.filterNotNull()
+                .filter { it.episodes.orEmpty().isNotEmpty() }
 
             val episodes = seasonDetails.flatMap { season ->
                 season.episodes.orEmpty().mapNotNull { ep ->
@@ -271,8 +286,11 @@ class IdlixProvider : MainAPI() {
                     val epNumber = ep.episodeNumberResolved
                     val epName = ep.name ?: ep.title ?: (if (epNumber != null) "Episode $epNumber" else null)
                     val watchData = WatchData(
-                        contentType = "series",
+                        contentType = "tv",
                         contentId = detail.id ?: return@mapNotNull null,
+                        slug = slug,
+                        season = seasonNumber,
+                        episode = epNumber,
                         episodeId = ep.id
                     ).toJson()
                     newEpisode(watchData) {
@@ -334,10 +352,15 @@ class IdlixProvider : MainAPI() {
                 ?: res.parsedSafe<ApiSeriesDetail>()?.id
                 ?: res.parsedSafe<ApiData<ApiMovieDetail>>()?.data?.id
                 ?: res.parsedSafe<ApiData<ApiSeriesDetail>>()?.data?.id) ?: slug
-            WatchData(contentType = if (isSeries) "series" else "movie", contentId = id)
+            WatchData(
+                contentType = if (isSeries) "tv" else "movie",
+                contentId = id,
+                slug = if (isSeries) slug else null
+            )
         }
 
-        val embedUrl = getEmbedUrl(watchData) ?: return false
+        val resolved = resolveWatchData(watchData)
+        val embedUrl = fixUrl(getEmbedUrl(resolved)) ?: return false
         return when {
             embedUrl.contains("jeniusplay.com") -> {
                 Jeniusplay().getUrl(embedUrl, "$mainUrl/", subtitleCallback, callback)
@@ -350,9 +373,31 @@ class IdlixProvider : MainAPI() {
         }
     }
 
+    private suspend fun resolveWatchData(data: WatchData): WatchData {
+        if (data.contentType.lowercase() != "tv") return data
+        if (!data.episodeId.isNullOrBlank()) return data
+        val slug = data.slug ?: return data
+        val season = data.season ?: return data
+        val episode = data.episode ?: return data
+
+        val epRes = runCatching {
+            app.get(
+                "$mainUrl/api/series/$slug/season/$season/episode/$episode",
+                interceptor = cloudflareInterceptor
+            )
+        }.getOrNull() ?: return data
+
+        val ep = epRes.parsedSafe<ApiEpisode>()
+            ?: epRes.parsedSafe<ApiData<ApiEpisode>>()?.data
+            ?: return data
+
+        return data.copy(episodeId = ep.id)
+    }
+
     private suspend fun getEmbedUrl(data: WatchData): String? {
         val contentTypes = when (data.contentType.lowercase()) {
-            "series" -> listOf("series", "tv")
+            "series" -> listOf("tv", "series")
+            "tv" -> listOf("tv", "series")
             else -> listOf(data.contentType)
         }
 
@@ -366,7 +411,11 @@ class IdlixProvider : MainAPI() {
 
             val challengeRes = app.post(
                 url = "$mainUrl/api/watch/challenge",
-                headers = mapOf("Accept" to "application/json"),
+                headers = mapOf(
+                    "Accept" to "application/json",
+                    "Origin" to mainUrl,
+                ),
+                referer = "$mainUrl/",
                 requestBody = payload.toRequestBody("application/json".toMediaType()),
                 interceptor = cloudflareInterceptor
             )
@@ -384,7 +433,11 @@ class IdlixProvider : MainAPI() {
 
             val solveRes = app.post(
                 url = "$mainUrl/api/watch/solve",
-                headers = mapOf("Accept" to "application/json"),
+                headers = mapOf(
+                    "Accept" to "application/json",
+                    "Origin" to mainUrl,
+                ),
+                referer = "$mainUrl/",
                 requestBody = solvePayload.toRequestBody("application/json".toMediaType()),
                 interceptor = cloudflareInterceptor
             )
@@ -409,8 +462,8 @@ class IdlixProvider : MainAPI() {
             val input = (challenge + i).toByteArray()
             val out = digest.digest(input)
             val sb = StringBuilder(bytesToCheck * 2)
-            for (b in out.take(bytesToCheck)) {
-                sb.append(b.toUByte().toString(16).padStart(2, '0'))
+            for (idx in 0 until bytesToCheck) {
+                sb.append(out[idx].toUByte().toString(16).padStart(2, '0'))
             }
             if (sb.startsWith(prefix)) return i
         }
@@ -543,6 +596,9 @@ class IdlixProvider : MainAPI() {
     data class WatchData(
         @JsonProperty("contentType") val contentType: String,
         @JsonProperty("contentId") val contentId: String,
+        @JsonProperty("slug") val slug: String? = null,
+        @JsonProperty("season") val season: Int? = null,
+        @JsonProperty("episode") val episode: Int? = null,
         @JsonProperty("episodeId") val episodeId: String? = null,
     )
 
