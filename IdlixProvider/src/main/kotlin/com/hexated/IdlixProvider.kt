@@ -88,6 +88,18 @@ class IdlixProvider : MainAPI() {
         return if (path.startsWith("http")) path else "https://image.tmdb.org/t/p/$size$path"
     }
 
+    private fun apiHeaders(): Map<String, String> = mapOf(
+        "Accept" to "application/json, text/plain, */*",
+        "Origin" to mainUrl,
+    )
+
+    private suspend fun apiGet(url: String, referer: String? = null) = app.get(
+            url,
+            headers = apiHeaders(),
+            referer = referer,
+            interceptor = cloudflareInterceptor
+        )
+
     private fun slugFromUrl(url: String): String {
         val path = runCatching { URI(url).path }.getOrNull().orEmpty()
         return path.trimEnd('/').substringAfterLast('/').trim()
@@ -107,7 +119,7 @@ class IdlixProvider : MainAPI() {
                 return newHomePageResponse(request.name, emptyList())
             }
             val url = getApiPageUrl(request.data, page)
-            val res = app.get(url, interceptor = cloudflareInterceptor)
+            val res = apiGet(url, referer = "$mainUrl/")
             mainUrl = getBaseUrl(res.url)
             val home = parseApiItems(res.text).mapNotNull { it.toApiSearchResult(request.data) }
             return newHomePageResponse(request.name, home)
@@ -249,7 +261,8 @@ class IdlixProvider : MainAPI() {
         val isSeries = url.contains("/series/")
         val apiUrl = if (isSeries) "$mainUrl/api/series/$slug" else "$mainUrl/api/movies/$slug"
 
-        val apiRes = app.get(apiUrl, interceptor = cloudflareInterceptor)
+        val pageReferer = if (isSeries) "$mainUrl/series/$slug" else "$mainUrl/movie/$slug"
+        val apiRes = apiGet(apiUrl, referer = pageReferer)
         mainUrl = getBaseUrl(apiRes.url)
 
         return if (isSeries) {
@@ -263,6 +276,7 @@ class IdlixProvider : MainAPI() {
             val tags = detail.genres?.mapNotNull { it.name }.orEmpty()
             val trailer = detail.trailerUrl
 
+            val seriesId = detail.idResolved ?: throw ErrorLoadingException("Missing series id")
             val seasonsFromDetail = detail.seasons?.mapNotNull { it.seasonNumberResolved }.orEmpty()
             val seasons = if (seasonsFromDetail.isNotEmpty()) {
                 seasonsFromDetail.distinct()
@@ -273,9 +287,16 @@ class IdlixProvider : MainAPI() {
 
             val seasonDetails = seasons.amap { seasonNumber ->
                 runCatching {
-                    val sRes = app.get("$mainUrl/api/series/$slug/season/$seasonNumber", interceptor = cloudflareInterceptor)
-                    sRes.parsedSafe<ApiSeasonDetail>()
+                    val sRes = apiGet("$mainUrl/api/series/$slug/season/$seasonNumber", referer = pageReferer)
+                    val parsed = sRes.parsedSafe<ApiSeasonDetail>()
                         ?: sRes.parsedSafe<ApiData<ApiSeasonDetail>>()?.data
+                    if (seasonNumber <= 3) {
+                        Log.d(
+                            "IdlixProvider",
+                            "season=$seasonNumber code=${sRes.code} eps=${parsed?.episodes?.size ?: 0}"
+                        )
+                    }
+                    parsed
                 }.getOrNull()
             }.filterNotNull()
                 .filter { it.episodes.orEmpty().isNotEmpty() }
@@ -287,7 +308,7 @@ class IdlixProvider : MainAPI() {
                     val epName = ep.name ?: ep.title ?: (if (epNumber != null) "Episode $epNumber" else null)
                     val watchData = WatchData(
                         contentType = "tv",
-                        contentId = detail.id ?: return@mapNotNull null,
+                        contentId = seriesId,
                         slug = slug,
                         season = seasonNumber,
                         episode = epNumber,
@@ -323,7 +344,7 @@ class IdlixProvider : MainAPI() {
 
             val watchData = WatchData(
                 contentType = "movie",
-                contentId = detail.id ?: slug
+                contentId = detail.idResolved ?: slug
             ).toJson()
 
             newMovieLoadResponse(title, url, TvType.Movie, watchData) {
@@ -347,11 +368,12 @@ class IdlixProvider : MainAPI() {
             val slug = slugFromUrl(data)
             val isSeries = data.contains("/series/")
             val apiUrl = if (isSeries) "$mainUrl/api/series/$slug" else "$mainUrl/api/movies/$slug"
-            val res = app.get(apiUrl, interceptor = cloudflareInterceptor)
-            val id = (res.parsedSafe<ApiMovieDetail>()?.id
-                ?: res.parsedSafe<ApiSeriesDetail>()?.id
-                ?: res.parsedSafe<ApiData<ApiMovieDetail>>()?.data?.id
-                ?: res.parsedSafe<ApiData<ApiSeriesDetail>>()?.data?.id) ?: slug
+            val referer = if (isSeries) "$mainUrl/series/$slug" else "$mainUrl/movie/$slug"
+            val res = apiGet(apiUrl, referer = referer)
+            val id = (res.parsedSafe<ApiMovieDetail>()?.idResolved
+                ?: res.parsedSafe<ApiSeriesDetail>()?.idResolved
+                ?: res.parsedSafe<ApiData<ApiMovieDetail>>()?.data?.idResolved
+                ?: res.parsedSafe<ApiData<ApiSeriesDetail>>()?.data?.idResolved) ?: slug
             WatchData(
                 contentType = if (isSeries) "tv" else "movie",
                 contentId = id,
@@ -381,9 +403,9 @@ class IdlixProvider : MainAPI() {
         val episode = data.episode ?: return data
 
         val epRes = runCatching {
-            app.get(
+            apiGet(
                 "$mainUrl/api/series/$slug/season/$season/episode/$episode",
-                interceptor = cloudflareInterceptor
+                referer = "$mainUrl/series/$slug"
             )
         }.getOrNull() ?: return data
 
@@ -405,9 +427,7 @@ class IdlixProvider : MainAPI() {
             val payload = mutableMapOf(
                 "contentType" to contentType,
                 "contentId" to data.contentId
-            ).also { map ->
-                data.episodeId?.let { map["episodeId"] = it }
-            }.toJson()
+            ).toJson()
 
             val challengeRes = app.post(
                 url = "$mainUrl/api/watch/challenge",
@@ -419,6 +439,7 @@ class IdlixProvider : MainAPI() {
                 requestBody = payload.toRequestBody("application/json".toMediaType()),
                 interceptor = cloudflareInterceptor
             )
+            Log.d("IdlixProvider", "watch/challenge code=${challengeRes.code} type=$contentType")
 
             val challenge = challengeRes.parsedSafe<WatchChallengeResponse>()
                 ?: challengeRes.parsedSafe<ApiData<WatchChallengeResponse>>()?.data
@@ -441,6 +462,7 @@ class IdlixProvider : MainAPI() {
                 requestBody = solvePayload.toRequestBody("application/json".toMediaType()),
                 interceptor = cloudflareInterceptor
             )
+            Log.d("IdlixProvider", "watch/solve code=${solveRes.code} type=$contentType")
             val solved = solveRes.parsedSafe<WatchSolveResponse>()
                 ?: solveRes.parsedSafe<ApiData<WatchSolveResponse>>()?.data
                 ?: continue
@@ -529,6 +551,8 @@ class IdlixProvider : MainAPI() {
 
     data class ApiMovieDetail(
         @JsonProperty("id") val id: String? = null,
+        @JsonProperty("movieId") val movieId: String? = null,
+        @JsonProperty("contentId") val contentId: String? = null,
         @JsonProperty("title") val title: String? = null,
         @JsonProperty("name") val name: String? = null,
         @JsonProperty("slug") val slug: String? = null,
@@ -543,6 +567,9 @@ class IdlixProvider : MainAPI() {
     ) {
         val voteAverageResolved: Double?
             get() = voteAverageCamel ?: voteAverageSnake
+
+        val idResolved: String?
+            get() = id ?: movieId ?: contentId
     }
 
     data class ApiSeasonRef(
@@ -581,6 +608,8 @@ class IdlixProvider : MainAPI() {
 
     data class ApiSeriesDetail(
         @JsonProperty("id") val id: String? = null,
+        @JsonProperty("tvSeriesId") val tvSeriesId: String? = null,
+        @JsonProperty("contentId") val contentId: String? = null,
         @JsonProperty("title") val title: String? = null,
         @JsonProperty("name") val name: String? = null,
         @JsonProperty("slug") val slug: String? = null,
@@ -591,7 +620,10 @@ class IdlixProvider : MainAPI() {
         @JsonProperty("genres") val genres: List<ApiGenre>? = null,
         @JsonProperty("seasons") val seasons: List<ApiSeasonRef>? = null,
         @JsonProperty("trailerUrl") val trailerUrl: String? = null,
-    )
+    ) {
+        val idResolved: String?
+            get() = id ?: tvSeriesId ?: contentId
+    }
 
     data class WatchData(
         @JsonProperty("contentType") val contentType: String,
