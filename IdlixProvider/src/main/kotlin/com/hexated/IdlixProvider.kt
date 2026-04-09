@@ -13,8 +13,12 @@ import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.toNewSearchResponseList
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.jsoup.nodes.Element
 import java.net.URI
+import java.security.MessageDigest
+import kotlin.math.ceil
 
 
 class IdlixProvider : MainAPI() {
@@ -77,6 +81,16 @@ class IdlixProvider : MainAPI() {
             lower.contains("/tvseries/") || lower.contains("/tv-series/") -> TvType.TvSeries
             else -> TvType.Movie
         }
+    }
+
+    private fun tmdbImage(path: String?, size: String = "w500"): String? {
+        if (path.isNullOrBlank()) return null
+        return if (path.startsWith("http")) path else "https://image.tmdb.org/t/p/$size$path"
+    }
+
+    private fun slugFromUrl(url: String): String {
+        val path = runCatching { URI(url).path }.getOrNull().orEmpty()
+        return path.trimEnd('/').substringAfterLast('/').trim()
     }
 
     override suspend fun getMainPage(
@@ -226,79 +240,80 @@ class IdlixProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val request = app.get(url, interceptor = cloudflareInterceptor)
-        directUrl = getBaseUrl(request.url)
-        val document = request.document
-        val title =
-            document.selectFirst("div.data > h1")?.text()?.replace(Regex("\\(\\d{4}\\)"), "")
-                ?.trim().toString()
-        val images = document.select("div.g-item")
+        val slug = slugFromUrl(url)
+        val isSeries = url.contains("/series/")
+        val apiUrl = if (isSeries) "$mainUrl/api/series/$slug" else "$mainUrl/api/movies/$slug"
 
-        val poster = images
-            .shuffled()
-            .firstOrNull()
-            ?.selectFirst("a")
-            ?.attr("href")
-            ?: document.select("div.poster > img").attr("src")
-        val tags = document.select("div.sgeneros > a").map { it.text() }
-        val year = Regex(",\\s?(\\d+)").find(
-            document.select("span.date").text().trim()
-        )?.groupValues?.get(1).toString().toIntOrNull()
-        val tvType = if (document.select("ul#section > li:nth-child(1)").text().contains("Episodes")
-        ) TvType.TvSeries else TvType.Movie
-        val description = if (tvType == TvType.Movie) document.select("div.wp-content > p").text().trim() else document.select("div.content > center > p:nth-child(3)").text().trim()
-        val trailer = document.selectFirst("div.embed iframe")?.attr("src")
-        val ratingValue = document.selectFirst("span.dt_rating_vgs")?.text()?.toDoubleOrNull()
-        val actors = document.select("div.persons > div[itemprop=actor]").map {
-            Actor(it.select("meta[itemprop=name]").attr("content"), it.select("img").attr("src"))
-        }
+        val apiRes = app.get(apiUrl, interceptor = cloudflareInterceptor)
+        mainUrl = getBaseUrl(apiRes.url)
 
-        val recommendations = document.select("div.owl-item").map {
-            val recName =
-                it.selectFirst("a")!!.attr("href").removeSuffix("/").split("/").last()
-            val recHref = it.selectFirst("a")!!.attr("href")
-            val recPosterUrl = it.selectFirst("img")?.attr("src").toString()
-            newTvSeriesSearchResponse(recName, recHref, TvType.TvSeries) {
-                this.posterUrl = recPosterUrl
-            }
-        }
+        return if (isSeries) {
+            val detail = apiRes.parsedSafe<ApiSeriesDetail>()
+                ?: apiRes.parsedSafe<ApiData<ApiSeriesDetail>>()?.data
+                ?: throw ErrorLoadingException("Failed to load series detail")
 
-        return if (tvType == TvType.TvSeries) {
-            val episodes = document.select("ul.episodios > li").map {
-                val href = it.select("a").attr("href")
-                val name = fixTitle(it.select("div.episodiotitle > a").text().trim())
-                val image = it.select("div.imagen > img").attr("src")
-                val episode = it.select("div.numerando").text().replace(" ", "").split("-").last()
-                    .toIntOrNull()
-                val season = it.select("div.numerando").text().replace(" ", "").split("-").first()
-                    .toIntOrNull()
-                newEpisode(href)
-                {
-                        this.name=name
-                        this.season=season
-                        this.episode=episode
-                        this.posterUrl=image
+            val title = detail.name ?: detail.title ?: slug.replace("-", " ").trim()
+            val poster = tmdbImage(detail.posterPath, "w500")
+            val year = detail.firstAirDate?.take(4)?.toIntOrNull()
+            val tags = detail.genres?.mapNotNull { it.name }.orEmpty()
+            val trailer = detail.trailerUrl
+
+            val seasons = detail.seasons?.mapNotNull { it.seasonNumberResolved }.orEmpty()
+            val seasonDetails = seasons.amap { seasonNumber ->
+                val sRes = app.get("$mainUrl/api/series/$slug/season/$seasonNumber", interceptor = cloudflareInterceptor)
+                sRes.parsedSafe<ApiSeasonDetail>()
+                    ?: sRes.parsedSafe<ApiData<ApiSeasonDetail>>()?.data
+            }.filterNotNull()
+
+            val episodes = seasonDetails.flatMap { season ->
+                season.episodes.orEmpty().mapNotNull { ep ->
+                    val seasonNumber = season.seasonNumberResolved
+                    val epNumber = ep.episodeNumberResolved
+                    val epName = ep.name ?: ep.title ?: (if (epNumber != null) "Episode $epNumber" else null)
+                    val watchData = WatchData(
+                        contentType = "series",
+                        contentId = detail.id ?: return@mapNotNull null,
+                        episodeId = ep.id
+                    ).toJson()
+                    newEpisode(watchData) {
+                        this.name = epName
+                        this.season = seasonNumber
+                        this.episode = epNumber
+                        this.posterUrl = tmdbImage(ep.stillPathResolved, "w500") ?: tmdbImage(detail.backdropPath, "w780")
+                    }
                 }
             }
+
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.year = year
-                this.plot = description
+                this.plot = detail.overview
                 this.tags = tags
-                if (ratingValue != null) this.score = Score.from10(ratingValue)
-                addActors(actors)
-                this.recommendations = recommendations
                 addTrailer(trailer)
             }
         } else {
-            newMovieLoadResponse(title, url, TvType.Movie, url) {
+            val detail = apiRes.parsedSafe<ApiMovieDetail>()
+                ?: apiRes.parsedSafe<ApiData<ApiMovieDetail>>()?.data
+                ?: throw ErrorLoadingException("Failed to load movie detail")
+
+            val title = detail.title ?: detail.name ?: slug.replace("-", " ").trim()
+            val poster = tmdbImage(detail.posterPath, "w500")
+            val year = detail.releaseDate?.take(4)?.toIntOrNull()
+            val tags = detail.genres?.mapNotNull { it.name }.orEmpty()
+            val ratingValue = detail.voteAverageResolved
+            val trailer = detail.trailerUrl
+
+            val watchData = WatchData(
+                contentType = "movie",
+                contentId = detail.id ?: slug
+            ).toJson()
+
+            newMovieLoadResponse(title, url, TvType.Movie, watchData) {
                 this.posterUrl = poster
                 this.year = year
-                this.plot = description
+                this.plot = detail.overview
                 this.tags = tags
                 if (ratingValue != null) this.score = Score.from10(ratingValue)
-                addActors(actors)
-                this.recommendations = recommendations
                 addTrailer(trailer)
             }
         }
@@ -310,38 +325,96 @@ class IdlixProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-
-        val document = app.get(data, interceptor = cloudflareInterceptor).document
-        document.select("ul#playeroptionsul > li").map {
-                Triple(
-                    it.attr("data-post"),
-                    it.attr("data-nume"),
-                    it.attr("data-type")
-                )
-            }.amap { (id, nume, type) ->
-            val json = app.post(
-                url = "$directUrl/wp-admin/admin-ajax.php",
-                data = mapOf(
-                    "action" to "doo_player_ajax", "post" to id, "nume" to nume, "type" to type
-                ),
-                referer = data,
-                headers = mapOf("Accept" to "*/*", "X-Requested-With" to "XMLHttpRequest"),
-                interceptor = cloudflareInterceptor
-            ).parsedSafe<ResponseHash>() ?: return@amap
-            val metrix = AppUtils.parseJson<AesData>(json.embed_url).m
-            val password = generateKey(json.key, metrix)
-            val decrypted =
-                AesHelper.cryptoAESHandler(json.embed_url, password.toByteArray(), false)
-                    ?.fixBloat() ?: return@amap
-
-          when {
-                !decrypted.contains("youtube") ->
-                    loadExtractor(decrypted,directUrl,subtitleCallback,callback)
-                else -> return@amap
-            }
+        val watchData = tryParseJson<WatchData>(data) ?: run {
+            val slug = slugFromUrl(data)
+            val isSeries = data.contains("/series/")
+            val apiUrl = if (isSeries) "$mainUrl/api/series/$slug" else "$mainUrl/api/movies/$slug"
+            val res = app.get(apiUrl, interceptor = cloudflareInterceptor)
+            val id = (res.parsedSafe<ApiMovieDetail>()?.id
+                ?: res.parsedSafe<ApiSeriesDetail>()?.id
+                ?: res.parsedSafe<ApiData<ApiMovieDetail>>()?.data?.id
+                ?: res.parsedSafe<ApiData<ApiSeriesDetail>>()?.data?.id) ?: slug
+            WatchData(contentType = if (isSeries) "series" else "movie", contentId = id)
         }
 
-        return true
+        val embedUrl = getEmbedUrl(watchData) ?: return false
+        return when {
+            embedUrl.contains("jeniusplay.com") -> {
+                Jeniusplay().getUrl(embedUrl, "$mainUrl/", subtitleCallback, callback)
+                true
+            }
+            else -> {
+                loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)
+                true
+            }
+        }
+    }
+
+    private suspend fun getEmbedUrl(data: WatchData): String? {
+        val contentTypes = when (data.contentType.lowercase()) {
+            "series" -> listOf("series", "tv")
+            else -> listOf(data.contentType)
+        }
+
+        for (contentType in contentTypes) {
+            val payload = mutableMapOf(
+                "contentType" to contentType,
+                "contentId" to data.contentId
+            ).also { map ->
+                data.episodeId?.let { map["episodeId"] = it }
+            }.toJson()
+
+            val challengeRes = app.post(
+                url = "$mainUrl/api/watch/challenge",
+                headers = mapOf("Accept" to "application/json"),
+                requestBody = payload.toRequestBody("application/json".toMediaType()),
+                interceptor = cloudflareInterceptor
+            )
+
+            val challenge = challengeRes.parsedSafe<WatchChallengeResponse>()
+                ?: challengeRes.parsedSafe<ApiData<WatchChallengeResponse>>()?.data
+                ?: continue
+
+            val nonce = solveChallenge(challenge.challenge, challenge.difficulty)
+            val solvePayload = mapOf(
+                "challenge" to challenge.challenge,
+                "signature" to challenge.signature,
+                "nonce" to nonce
+            ).toJson()
+
+            val solveRes = app.post(
+                url = "$mainUrl/api/watch/solve",
+                headers = mapOf("Accept" to "application/json"),
+                requestBody = solvePayload.toRequestBody("application/json".toMediaType()),
+                interceptor = cloudflareInterceptor
+            )
+            val solved = solveRes.parsedSafe<WatchSolveResponse>()
+                ?: solveRes.parsedSafe<ApiData<WatchSolveResponse>>()?.data
+                ?: continue
+
+            val embed = solved.embedUrlResolved
+            if (!embed.isNullOrBlank()) return embed
+        }
+
+        return null
+    }
+
+    private fun solveChallenge(challenge: String, difficulty: Int): Int {
+        val prefix = "0".repeat(difficulty.coerceAtLeast(0))
+        val bytesToCheck = (ceil(difficulty / 2.0) + 1).toInt().coerceAtLeast(1)
+        val digest = MessageDigest.getInstance("SHA-256")
+
+        for (i in 0 until 10_000_000) {
+            digest.reset()
+            val input = (challenge + i).toByteArray()
+            val out = digest.digest(input)
+            val sb = StringBuilder(bytesToCheck * 2)
+            for (b in out.take(bytesToCheck)) {
+                sb.append(b.toUByte().toString(16).padStart(2, '0'))
+            }
+            if (sb.startsWith(prefix)) return i
+        }
+        throw ErrorLoadingException("Challenge too difficult")
     }
 
     private fun generateKey(r: String, m: String): String {
@@ -377,6 +450,10 @@ class IdlixProvider : MainAPI() {
         @JsonProperty("m") val m: String,
     )
 
+    data class ApiData<T>(
+        @JsonProperty("data") val data: T? = null,
+    )
+
     data class ApiListResponse(
         @JsonProperty("data") val data: List<ApiItem>? = null,
     )
@@ -392,5 +469,95 @@ class IdlixProvider : MainAPI() {
         @JsonProperty("type") val type: String? = null,
         @JsonProperty("contentType") val contentType: String? = null,
     )
+
+    data class ApiGenre(
+        @JsonProperty("name") val name: String? = null,
+    )
+
+    data class ApiMovieDetail(
+        @JsonProperty("id") val id: String? = null,
+        @JsonProperty("title") val title: String? = null,
+        @JsonProperty("name") val name: String? = null,
+        @JsonProperty("slug") val slug: String? = null,
+        @JsonProperty("overview") val overview: String? = null,
+        @JsonProperty("releaseDate") val releaseDate: String? = null,
+        @JsonProperty("posterPath") val posterPath: String? = null,
+        @JsonProperty("backdropPath") val backdropPath: String? = null,
+        @JsonProperty("genres") val genres: List<ApiGenre>? = null,
+        @JsonProperty("vote_average") val voteAverageSnake: Double? = null,
+        @JsonProperty("voteAverage") val voteAverageCamel: Double? = null,
+        @JsonProperty("trailerUrl") val trailerUrl: String? = null,
+    ) {
+        val voteAverageResolved: Double?
+            get() = voteAverageCamel ?: voteAverageSnake
+    }
+
+    data class ApiSeasonRef(
+        @JsonProperty("seasonNumber") val seasonNumber: Int? = null,
+        @JsonProperty("season_number") val seasonNumberAlt: Int? = null,
+        @JsonProperty("name") val name: String? = null,
+    ) {
+        val seasonNumberResolved: Int?
+            get() = seasonNumber ?: seasonNumberAlt
+    }
+
+    data class ApiEpisode(
+        @JsonProperty("id") val id: String? = null,
+        @JsonProperty("episodeNumber") val episodeNumber: Int? = null,
+        @JsonProperty("episode_number") val episodeNumberAlt: Int? = null,
+        @JsonProperty("name") val name: String? = null,
+        @JsonProperty("title") val title: String? = null,
+        @JsonProperty("overview") val overview: String? = null,
+        @JsonProperty("stillPath") val stillPath: String? = null,
+        @JsonProperty("still_path") val stillPathAlt: String? = null,
+    ) {
+        val episodeNumberResolved: Int?
+            get() = episodeNumber ?: episodeNumberAlt
+        val stillPathResolved: String?
+            get() = stillPath ?: stillPathAlt
+    }
+
+    data class ApiSeasonDetail(
+        @JsonProperty("seasonNumber") val seasonNumber: Int? = null,
+        @JsonProperty("season_number") val seasonNumberAlt: Int? = null,
+        @JsonProperty("episodes") val episodes: List<ApiEpisode>? = null,
+    ) {
+        val seasonNumberResolved: Int?
+            get() = seasonNumber ?: seasonNumberAlt
+    }
+
+    data class ApiSeriesDetail(
+        @JsonProperty("id") val id: String? = null,
+        @JsonProperty("title") val title: String? = null,
+        @JsonProperty("name") val name: String? = null,
+        @JsonProperty("slug") val slug: String? = null,
+        @JsonProperty("overview") val overview: String? = null,
+        @JsonProperty("firstAirDate") val firstAirDate: String? = null,
+        @JsonProperty("posterPath") val posterPath: String? = null,
+        @JsonProperty("backdropPath") val backdropPath: String? = null,
+        @JsonProperty("genres") val genres: List<ApiGenre>? = null,
+        @JsonProperty("seasons") val seasons: List<ApiSeasonRef>? = null,
+        @JsonProperty("trailerUrl") val trailerUrl: String? = null,
+    )
+
+    data class WatchData(
+        @JsonProperty("contentType") val contentType: String,
+        @JsonProperty("contentId") val contentId: String,
+        @JsonProperty("episodeId") val episodeId: String? = null,
+    )
+
+    data class WatchChallengeResponse(
+        @JsonProperty("challenge") val challenge: String,
+        @JsonProperty("signature") val signature: String,
+        @JsonProperty("difficulty") val difficulty: Int,
+    )
+
+    data class WatchSolveResponse(
+        @JsonProperty("embedUrl") val embedUrl: String? = null,
+        @JsonProperty("embed_url") val embedUrlAlt: String? = null,
+    ) {
+        val embedUrlResolved: String?
+            get() = embedUrl ?: embedUrlAlt
+    }
 
 }
