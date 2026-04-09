@@ -18,5 +18,6 @@ class FunmovieslixProvider : Plugin() {
         registerExtractorAPI(Vidhideplus())
         registerExtractorAPI(VideyV2())
         registerExtractorAPI(F75s())
+        registerExtractorAPI(Bysezoxexe())
     }
 }
