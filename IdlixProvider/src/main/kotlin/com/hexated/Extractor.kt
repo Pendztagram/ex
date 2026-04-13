@@ -3,6 +3,7 @@ package com.hexated
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.AppUtils
 import com.lagradost.cloudstream3.utils.ExtractorApi
@@ -14,6 +15,7 @@ class Jeniusplay : ExtractorApi() {
     override var name = "Jeniusplay"
     override var mainUrl = "https://jeniusplay.com"
     override val requiresReferer = true
+    private val cloudflareInterceptor by lazy { CloudflareKiller() }
 
     override suspend fun getUrl(
         url: String,
@@ -21,14 +23,15 @@ class Jeniusplay : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val document = app.get(url, referer = referer).document
+        val document = app.get(url, referer = referer, interceptor = cloudflareInterceptor).document
         val hash = url.split("/").last().substringAfter("data=")
 
         val m3uLink = app.post(
             url = "$mainUrl/player/index.php?data=$hash&do=getVideo",
             data = mapOf("hash" to hash, "r" to "$referer"),
             referer = referer,
-            headers = mapOf("X-Requested-With" to "XMLHttpRequest")
+            headers = mapOf("X-Requested-With" to "XMLHttpRequest"),
+            interceptor = cloudflareInterceptor
         ).parsed<ResponseSource>().videoSource.replace(".txt", ".m3u8")
 
         generateM3u8(

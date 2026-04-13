@@ -23,6 +23,7 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.base64Decode
 import com.lagradost.cloudstream3.getQualityFromString
 import com.lagradost.cloudstream3.mainPageOf
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.newEpisode
 import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.newMovieLoadResponse
@@ -36,6 +37,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.jsoup.nodes.Document
 import java.security.MessageDigest
 import java.text.Normalizer
 
@@ -51,6 +53,7 @@ class IdlixProvider : MainAPI() {
         TvType.Anime,
         TvType.AsianDrama
     )
+    private val cloudflareInterceptor by lazy { CloudflareKiller() }
 
     override val mainPage = mainPageOf(
         "$mainUrl/api/movies?page=%d&limit=36&sort=createdAt" to "Movie Terbaru",
@@ -67,7 +70,8 @@ class IdlixProvider : MainAPI() {
         request: MainPageRequest
     ): HomePageResponse {
         val url = if (request.data.contains("%d")) request.data.format(page) else request.data
-        val res = app.get(url, timeout = 10000L).parsedSafe<ApiResponse>()
+        warmupSession()
+        val res = app.get(url, timeout = 10000L, interceptor = cloudflareInterceptor).parsedSafe<ApiResponse>()
             ?: return newHomePageResponse(request.name, emptyList())
         val home = res.data.map { item ->
             val title = item.title ?: "UnKnown"
@@ -98,7 +102,8 @@ class IdlixProvider : MainAPI() {
 
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val url = "$mainUrl/api/search?q=$query&page=$page&limit=8"
-        val res = app.get(url).parsedSafe<SearchApiResponse>() ?: return null
+        warmupSession()
+        val res = app.get(url, interceptor = cloudflareInterceptor).parsedSafe<SearchApiResponse>() ?: return null
         val items = res.results
         val results = items.mapNotNull { item ->
             val title = item.title
@@ -133,7 +138,8 @@ class IdlixProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val response = app.get(url, timeout = 10000L)
+        warmupSession()
+        val response = app.get(url, timeout = 10000L, interceptor = cloudflareInterceptor)
 
         val data = response.parsedSafe<DetailResponse>()
             ?: throw ErrorLoadingException("Invalid JSON")
@@ -162,7 +168,7 @@ class IdlixProvider : MainAPI() {
         }
 
         val recommendations = try {
-            app.get(relatedUrl, referer = mainUrl)
+            app.get(relatedUrl, referer = mainUrl, interceptor = cloudflareInterceptor)
                 .parsedSafe<ApiResponse>()?.data?.mapNotNull { item ->
                     val recTitle = item.title ?: return@mapNotNull null
                     val recPoster = item.posterPath?.let { "https://image.tmdb.org/t/p/w342$it" }
@@ -222,7 +228,7 @@ class IdlixProvider : MainAPI() {
                 val seasonUrl = "$mainUrl/api/series/${data.slug}/season/$seasonNum"
 
                 val seasonData = try {
-                    val res = app.get(seasonUrl, referer = mainUrl)
+                    val res = app.get(seasonUrl, referer = mainUrl, interceptor = cloudflareInterceptor)
                     res.parsedSafe<SeasonWrapper>()?.season
                 } catch (_: Exception) {
                     null
@@ -303,9 +309,16 @@ class IdlixProvider : MainAPI() {
 
         val contentId = parsed.id
         val contentType = parsed.type
+        warmupSession()
 
         val ts = System.currentTimeMillis()
-        val aclrRes = app.get("$mainUrl/pagead/ad_frame.js?_=$ts").text
+        val aclrRes = runCatching {
+            app.get(
+                "$mainUrl/pagead/ad_frame.js?_=$ts",
+                referer = "$mainUrl/",
+                interceptor = cloudflareInterceptor
+            ).text
+        }.getOrNull().orEmpty()
         val aclr = Regex("""__aclr\s*=\s*"([a-f0-9]+)"""")
             .find(aclrRes)
             ?.groupValues?.getOrNull(1)
@@ -328,7 +341,9 @@ class IdlixProvider : MainAPI() {
         val challengeRes = app.post(
             "$mainUrl/api/watch/challenge",
             requestBody = challengejson.toRequestBody("application/json".toMediaType()),
-            headers = headers
+            headers = headers,
+            referer = "$mainUrl/",
+            interceptor = cloudflareInterceptor
         ).parsedSafe<ChallengeResponse>() ?: return false
 
         val nonce = solvePow(
@@ -354,10 +369,54 @@ class IdlixProvider : MainAPI() {
                 "referer" to mainUrl,
                 "user-agent" to USER_AGENT,
             )
+            ,
+            referer = "$mainUrl/",
+            interceptor = cloudflareInterceptor
         ).parsedSafe<SolveResponse>() ?: return false
-        val finalUrl = app.get("$mainUrl${solveRes.embedUrl}").document.select("iframe").attr("src")
-        loadExtractor(finalUrl, mainUrl, subtitleCallback, callback)
+        val embedUrl = solveRes.embedUrl?.let { if (it.startsWith("http")) it else "$mainUrl$it" } ?: return false
+        val finalUrl = unwrapIframeUrl(embedUrl) ?: return false
+        if (finalUrl.contains("jeniusplay", true)) {
+            Jeniusplay().getUrl(finalUrl, mainUrl, subtitleCallback, callback)
+        } else {
+            loadExtractor(finalUrl, mainUrl, subtitleCallback, callback)
+        }
         return true
+    }
+
+    private suspend fun warmupSession() {
+        runCatching {
+            app.get(
+                "$mainUrl/",
+                referer = "$mainUrl/",
+                interceptor = cloudflareInterceptor
+            )
+        }
+        runCatching {
+            app.get(
+                "$mainUrl/api/homepage/ads/surface/preroll",
+                referer = "$mainUrl/",
+                interceptor = cloudflareInterceptor
+            )
+        }
+    }
+
+    private suspend fun unwrapIframeUrl(url: String): String? {
+        var current = url
+        repeat(5) {
+            val response = app.get(
+                current,
+                referer = "$mainUrl/",
+                interceptor = cloudflareInterceptor
+            )
+            val next = extractIframeUrl(response.document) ?: return current
+            current = if (next.startsWith("http")) next else "$mainUrl$next"
+        }
+        return current
+    }
+
+    private fun extractIframeUrl(document: Document): String? {
+        val iframe = document.selectFirst("iframe[src], iframe[data-src]") ?: return null
+        return iframe.attr("src").ifBlank { iframe.attr("data-src") }.takeIf { it.isNotBlank() }
     }
 
     fun solvePow(challenge: String, difficulty: Int): Int {
