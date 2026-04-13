@@ -1,6 +1,13 @@
 package com.hexated
 
+import android.annotation.SuppressLint
+import android.os.Handler
+import android.os.Looper
+import android.webkit.CookieManager
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import com.lagradost.cloudstream3.Actor
+import com.lagradost.cloudstream3.AcraApplication
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.ErrorLoadingException
 import com.lagradost.cloudstream3.HomePageResponse
@@ -23,7 +30,6 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.base64Decode
 import com.lagradost.cloudstream3.getQualityFromString
 import com.lagradost.cloudstream3.mainPageOf
-import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.newEpisode
 import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.newMovieLoadResponse
@@ -35,8 +41,12 @@ import com.lagradost.cloudstream3.utils.AppUtils
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.nicehttp.NiceResponse
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Interceptor
+import okhttp3.Response
 import org.jsoup.nodes.Document
 import java.security.MessageDigest
 import java.text.Normalizer
@@ -53,7 +63,51 @@ class IdlixProvider : MainAPI() {
         TvType.Anime,
         TvType.AsianDrama
     )
-    private val cloudflareInterceptor by lazy { CloudflareKiller() }
+    private val turnstileInterceptor = IdlixTurnstileInterceptor()
+
+    private suspend fun request(url: String, ref: String? = null): NiceResponse {
+        return app.get(
+            url = url,
+            referer = ref,
+            interceptor = turnstileInterceptor,
+            headers = mapOf(
+                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "User-Agent" to USER_AGENT
+            ),
+            timeout = 15000L
+        )
+    }
+
+    private suspend fun requestJson(url: String, ref: String? = "$mainUrl/"): NiceResponse {
+        return app.get(
+            url = url,
+            referer = ref,
+            interceptor = turnstileInterceptor,
+            headers = mapOf(
+                "Accept" to "application/json, text/plain, */*",
+                "Origin" to mainUrl,
+                "User-Agent" to USER_AGENT
+            ),
+            timeout = 15000L
+        )
+    }
+
+    private suspend fun postJson(url: String, body: String, ref: String? = "$mainUrl/"): NiceResponse {
+        return app.post(
+            url = url,
+            requestBody = body.toRequestBody("application/json".toMediaType()),
+            referer = ref,
+            interceptor = turnstileInterceptor,
+            headers = mapOf(
+                "accept" to "*/*",
+                "content-type" to "application/json",
+                "origin" to mainUrl,
+                "referer" to mainUrl,
+                "user-agent" to USER_AGENT,
+            ),
+            timeout = 15000L
+        )
+    }
 
     override val mainPage = mainPageOf(
         "$mainUrl/api/movies?page=%d&limit=36&sort=createdAt" to "Movie Terbaru",
@@ -71,7 +125,7 @@ class IdlixProvider : MainAPI() {
     ): HomePageResponse {
         val url = if (request.data.contains("%d")) request.data.format(page) else request.data
         warmupSession()
-        val res = app.get(url, timeout = 10000L, interceptor = cloudflareInterceptor).parsedSafe<ApiResponse>()
+        val res = requestJson(url).parsedSafe<ApiResponse>()
             ?: return newHomePageResponse(request.name, emptyList())
         val home = res.data.map { item ->
             val title = item.title ?: "UnKnown"
@@ -103,7 +157,7 @@ class IdlixProvider : MainAPI() {
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val url = "$mainUrl/api/search?q=$query&page=$page&limit=8"
         warmupSession()
-        val res = app.get(url, interceptor = cloudflareInterceptor).parsedSafe<SearchApiResponse>() ?: return null
+        val res = requestJson(url).parsedSafe<SearchApiResponse>() ?: return null
         val items = res.results
         val results = items.mapNotNull { item ->
             val title = item.title
@@ -139,7 +193,7 @@ class IdlixProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         warmupSession()
-        val response = app.get(url, timeout = 10000L, interceptor = cloudflareInterceptor)
+        val response = requestJson(url)
 
         val data = response.parsedSafe<DetailResponse>()
             ?: throw ErrorLoadingException("Invalid JSON")
@@ -168,7 +222,7 @@ class IdlixProvider : MainAPI() {
         }
 
         val recommendations = try {
-            app.get(relatedUrl, referer = mainUrl, interceptor = cloudflareInterceptor)
+            requestJson(relatedUrl, mainUrl)
                 .parsedSafe<ApiResponse>()?.data?.mapNotNull { item ->
                     val recTitle = item.title ?: return@mapNotNull null
                     val recPoster = item.posterPath?.let { "https://image.tmdb.org/t/p/w342$it" }
@@ -228,7 +282,7 @@ class IdlixProvider : MainAPI() {
                 val seasonUrl = "$mainUrl/api/series/${data.slug}/season/$seasonNum"
 
                 val seasonData = try {
-                    val res = app.get(seasonUrl, referer = mainUrl, interceptor = cloudflareInterceptor)
+                    val res = requestJson(seasonUrl, mainUrl)
                     res.parsedSafe<SeasonWrapper>()?.season
                 } catch (_: Exception) {
                     null
@@ -313,10 +367,9 @@ class IdlixProvider : MainAPI() {
 
         val ts = System.currentTimeMillis()
         val aclrRes = runCatching {
-            app.get(
+            request(
                 "$mainUrl/pagead/ad_frame.js?_=$ts",
-                referer = "$mainUrl/",
-                interceptor = cloudflareInterceptor
+                "$mainUrl/"
             ).text
         }.getOrNull().orEmpty()
         val aclr = Regex("""__aclr\s*=\s*"([a-f0-9]+)"""")
@@ -330,20 +383,9 @@ class IdlixProvider : MainAPI() {
 }
 """.trimIndent()
 
-        val headers = mapOf(
-            "accept" to "*/*",
-            "content-type" to "application/json",
-            "origin" to mainUrl,
-            "referer" to mainUrl,
-            "user-agent" to USER_AGENT,
-        )
-
-        val challengeRes = app.post(
+        val challengeRes = postJson(
             "$mainUrl/api/watch/challenge",
-            requestBody = challengejson.toRequestBody("application/json".toMediaType()),
-            headers = headers,
-            referer = "$mainUrl/",
-            interceptor = cloudflareInterceptor
+            challengejson
         ).parsedSafe<ChallengeResponse>() ?: return false
 
         val nonce = solvePow(
@@ -359,19 +401,9 @@ class IdlixProvider : MainAPI() {
         }
         """.trimIndent()
 
-        val solveRes = app.post(
+        val solveRes = postJson(
             "$mainUrl/api/watch/solve",
-            requestBody = solvejson.toRequestBody("application/json".toMediaType()),
-            headers = mapOf(
-                "accept" to "*/*",
-                "content-type" to "application/json",
-                "origin" to mainUrl,
-                "referer" to mainUrl,
-                "user-agent" to USER_AGENT,
-            )
-            ,
-            referer = "$mainUrl/",
-            interceptor = cloudflareInterceptor
+            solvejson
         ).parsedSafe<SolveResponse>() ?: return false
         val embedUrl = solveRes.embedUrl?.let { if (it.startsWith("http")) it else "$mainUrl$it" } ?: return false
         val finalUrl = unwrapIframeUrl(embedUrl) ?: return false
@@ -385,17 +417,14 @@ class IdlixProvider : MainAPI() {
 
     private suspend fun warmupSession() {
         runCatching {
-            app.get(
+            request(
                 "$mainUrl/",
-                referer = "$mainUrl/",
-                interceptor = cloudflareInterceptor
             )
         }
         runCatching {
-            app.get(
+            requestJson(
                 "$mainUrl/api/homepage/ads/surface/preroll",
-                referer = "$mainUrl/",
-                interceptor = cloudflareInterceptor
+                "$mainUrl/"
             )
         }
     }
@@ -403,10 +432,9 @@ class IdlixProvider : MainAPI() {
     private suspend fun unwrapIframeUrl(url: String): String? {
         var current = url
         repeat(5) {
-            val response = app.get(
+            val response = request(
                 current,
-                referer = "$mainUrl/",
-                interceptor = cloudflareInterceptor
+                "$mainUrl/"
             )
             val next = extractIframeUrl(response.document) ?: return current
             current = if (next.startsWith("http")) next else "$mainUrl$next"
@@ -461,4 +489,101 @@ fun getSearchQuality(check: String?): SearchQuality? {
 
     for ((regex, quality) in patterns) if (regex.containsMatchIn(u)) return quality
     return null
+}
+
+class IdlixTurnstileInterceptor(
+    private val cookieName: String = "cf_clearance"
+) : Interceptor {
+    companion object {
+        private const val POLL_INTERVAL_MS = 500L
+        private const val MAX_ATTEMPTS = 40
+    }
+
+    private fun domainUrl(request: Request): String {
+        return "${request.url.scheme}://${request.url.host}"
+    }
+
+    private fun cookieHeader(domainUrl: String): String? {
+        return CookieManager.getInstance().getCookie(domainUrl)
+    }
+
+    private fun hasClearance(domainUrl: String): Boolean {
+        val raw = cookieHeader(domainUrl) ?: return false
+        return raw.split(";")
+            .map { it.trim() }
+            .any { it.startsWith("$cookieName=") || it.startsWith("_cfuvid=") }
+    }
+
+    private fun clearCookies(domainUrl: String) {
+        CookieManager.getInstance().apply {
+            setCookie(domainUrl, "$cookieName=; Max-Age=0")
+            setCookie(domainUrl, "_cfuvid=; Max-Age=0")
+            flush()
+        }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val original = chain.request()
+        val domainUrl = domainUrl(original)
+        val cookieManager = CookieManager.getInstance()
+
+        if (hasClearance(domainUrl)) {
+            val attempted = chain.proceed(
+                original.newBuilder()
+                    .header("Cookie", cookieHeader(domainUrl).orEmpty())
+                    .build()
+            )
+            if (attempted.code != 403 && attempted.code != 503) return attempted
+            attempted.close()
+            clearCookies(domainUrl)
+        }
+
+        val context = AcraApplication.context ?: return chain.proceed(original)
+        val handler = Handler(Looper.getMainLooper())
+        var webView: WebView? = null
+        var resolvedUserAgent = original.header("User-Agent") ?: USER_AGENT
+
+        handler.post {
+            try {
+                val wv = WebView(context).also { webView = it }
+                wv.settings.apply {
+                    javaScriptEnabled = true
+                    domStorageEnabled = true
+                    userAgentString = resolvedUserAgent
+                    resolvedUserAgent = userAgentString
+                }
+                wv.webViewClient = WebViewClient()
+                wv.loadUrl(original.url.toString())
+            } catch (_: Exception) {
+            }
+        }
+
+        var attempts = 0
+        while (attempts < MAX_ATTEMPTS) {
+            Thread.sleep(POLL_INTERVAL_MS)
+            if (hasClearance(domainUrl)) {
+                cookieManager.flush()
+                break
+            }
+            attempts++
+        }
+
+        handler.post {
+            try {
+                webView?.stopLoading()
+                webView?.clearCache(false)
+                webView?.destroy()
+                webView = null
+            } catch (_: Exception) {
+            }
+        }
+
+        return chain.proceed(
+            original.newBuilder()
+                .header("Cookie", cookieHeader(domainUrl).orEmpty())
+                .header("User-Agent", resolvedUserAgent)
+                .build()
+        )
+    }
 }
