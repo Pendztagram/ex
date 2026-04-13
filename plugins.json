@@ -338,10 +338,10 @@
     },
     {
         "iconUrl": "https://t0.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://idlixian.com&size=16",
-        "jarFileSize": 220035,
+        "jarFileSize": 207243,
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 53933,
+        "fileSize": 49058,
         "status": 1,
         "language": "id",
         "authors": [
@@ -353,7 +353,7 @@
             "Anime",
             "AsianDrama"
         ],
-        "version": 6,
+        "version": 7,
         "internalName": "IdlixProvider",
         "jarUrl": "https://raw.githubusercontent.com/Pendztagram/ex/builds/IdlixProvider.jar",
         "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/IdlixProvider.cs3",
