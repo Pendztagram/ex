@@ -1,7 +1,6 @@
 package com.hexated
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addScore
@@ -359,148 +358,72 @@ class IdlixProvider : MainAPI() {
     ): Boolean {
         val parsed = tryParseJson<LoadData>(data) ?: return false
         val contentId = parsed.id
-        val refererUrl = parsed.ref ?: mainUrl
-        val contentTypes = buildList {
-            add(parsed.type)
-            if (parsed.type.equals("episode", true)) {
-                // Idlix sometimes expects a different contentType for episode playback.
-                addAll(listOf("tv", "series"))
-            }
-        }.distinct()
-
-        val jsonHeaders = mapOf(
+        val contentType = parsed.type
+        val headers = mapOf(
             "accept" to "*/*",
             "content-type" to "application/json",
             "origin" to mainUrl,
-            "user-agent" to USER_AGENT,
-        )
-        val htmlHeaders = mapOf(
-            "accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "origin" to mainUrl,
+            "referer" to mainUrl,
             "user-agent" to USER_AGENT,
         )
 
-        Log.d("Idlix", "loadLinks id=$contentId types=$contentTypes ref=$refererUrl")
-
-        // Required: clearance token
         val ts = System.currentTimeMillis()
-        val aclrRes = runCatching {
-            app.get(
-                "$mainUrl/pagead/ad_frame.js?_=$ts",
-                headers = htmlHeaders,
-                referer = refererUrl,
-                interceptor = cloudflareInterceptor
-            ).text
-        }.getOrNull().orEmpty()
-        val aclr = Regex("""__aclr\s*=\s*["']([0-9a-fA-F]+)["']""")
-            .find(aclrRes)?.groupValues?.get(1)
-            ?: run {
-                Log.d("Idlix", "loadLinks: failed to extract __aclr")
-                return false
-            }
+        val aclrRes = app.get(
+            "$mainUrl/pagead/ad_frame.js?_=$ts",
+            referer = mainUrl,
+            interceptor = cloudflareInterceptor
+        ).text
+        val aclr = Regex("""__aclr\s*=\s*"([a-f0-9]+)"""")
+            .find(aclrRes)
+            ?.groupValues?.getOrNull(1)
 
-        // warm up session (matches browser behavior)
-        runCatching {
-            app.get(
-                "$mainUrl/api/homepage/ads/surface/preroll",
-                headers = htmlHeaders,
-                referer = refererUrl,
-                interceptor = cloudflareInterceptor
-            )
-        }
-
-        val embedPath = contentTypes.firstNotNullOfOrNull { type ->
-            getEmbedPath(type, contentId, aclr, jsonHeaders, refererUrl)
-        } ?: return false
-
-        val embedUrl = if (embedPath.startsWith("http")) embedPath else "$mainUrl$embedPath"
-        Log.d("Idlix", "loadLinks: embedUrl=$embedUrl")
-        val embedDoc = app.get(embedUrl, headers = htmlHeaders, referer = refererUrl, interceptor = cloudflareInterceptor).document
-        val iframeUrl = extractIframeUrl(embedDoc) ?: return false
-        Log.d("Idlix", "loadLinks: iframeUrl=$iframeUrl")
-        val fixedFinalUrl = unwrapIframeUrl(fixUrl(iframeUrl) ?: return false, htmlHeaders, refererUrl) ?: return false
-        Log.d("Idlix", "loadLinks: finalUrl=$fixedFinalUrl")
-
-        return when {
-            fixedFinalUrl.contains("jeniusplay", ignoreCase = true) -> {
-                // Jeniusplay often expects its own-domain referer; pass null to let extractor set it.
-                Jeniusplay().getUrl(fixedFinalUrl, null, subtitleCallback, callback)
-                true
-            }
-            else -> {
-                loadExtractor(fixedFinalUrl, mainUrl, subtitleCallback, callback)
-                true
-            }
-        }
-    }
-
-    private fun extractIframeUrl(document: org.jsoup.nodes.Document): String? {
-        val iframe = document.selectFirst("iframe[src]") ?: document.selectFirst("iframe[data-src]")
-        val src = iframe?.attr("src")?.ifBlank { iframe.attr("data-src") }?.trim()
-        return src?.takeIf { it.isNotBlank() }
-    }
-
-    private suspend fun getEmbedPath(
-        contentType: String,
-        contentId: String,
-        clearance: String,
-        headers: Map<String, String>,
-        refererUrl: String,
-    ): String? {
         val challengeJson = """
-            {
-              "contentType": "$contentType",
-              "contentId": "$contentId",
-              "clearance": "$clearance"
-            }
-        """.trimIndent()
+{
+    "contentType": "$contentType",
+    "contentId": "$contentId"${if (aclr != null) ",\n    \"clearance\": \"$aclr\"" else ""}
+}
+""".trimIndent()
 
-        val challengeHttp = app.post(
+        val challengeRes = app.post(
             "$mainUrl/api/watch/challenge",
             requestBody = challengeJson.toRequestBody("application/json".toMediaType()),
             headers = headers,
-            referer = refererUrl,
             interceptor = cloudflareInterceptor
-        )
-        val challengeRes = challengeHttp.parsedSafe<ChallengeResponse>() ?: run {
-            Log.d("Idlix", "watch/challenge failed type=$contentType id=$contentId")
-            return null
-        }
+        ).parsedSafe<ChallengeResponse>() ?: return false
 
         val nonce = solvePow(challengeRes.challenge, challengeRes.difficulty)
         val solveJson = """
-            {
-              "challenge": "${challengeRes.challenge}",
-              "signature": "${challengeRes.signature}",
-              "nonce": $nonce
-            }
-        """.trimIndent()
+{
+    "challenge": "${challengeRes.challenge}",
+    "signature": "${challengeRes.signature}",
+    "nonce": $nonce
+}
+""".trimIndent()
 
-        val solveHttp = app.post(
+        val solveRes = app.post(
             "$mainUrl/api/watch/solve",
             requestBody = solveJson.toRequestBody("application/json".toMediaType()),
             headers = headers,
-            referer = refererUrl,
             interceptor = cloudflareInterceptor
-        )
-        val solveRes = solveHttp.parsedSafe<SolveResponse>() ?: run {
-            Log.d("Idlix", "watch/solve failed type=$contentType id=$contentId")
-            return null
-        }
+        ).parsedSafe<SolveResponse>() ?: return false
 
-        return solveRes.embedUrlResolved
-    }
+        val embedUrl = solveRes.embedUrlResolved?.let { if (it.startsWith("http")) it else "$mainUrl$it" } ?: return false
+        val finalUrl = app.get(
+            embedUrl,
+            referer = mainUrl,
+            interceptor = cloudflareInterceptor
+        ).document.selectFirst("iframe")?.attr("src")?.takeIf { it.isNotBlank() }?.let(::fixUrl) ?: return false
 
-    private suspend fun unwrapIframeUrl(url: String, headers: Map<String, String>, refererUrl: String): String? {
-        var current = url
-        val base = getBaseUrl(mainUrl)
-        repeat(4) {
-            if (!current.startsWith(base)) return current
-            val doc = app.get(current, headers = headers, referer = refererUrl, interceptor = cloudflareInterceptor).document
-            val next = extractIframeUrl(doc) ?: return current
-            current = fixUrl(next) ?: return null
+        return when {
+            finalUrl.contains("jeniusplay", ignoreCase = true) -> {
+                Jeniusplay().getUrl(finalUrl, null, subtitleCallback, callback)
+                true
+            }
+            else -> {
+                loadExtractor(finalUrl, mainUrl, subtitleCallback, callback)
+                true
+            }
         }
-        return current
     }
 
     private fun solvePow(challenge: String, difficulty: Int): Int {
