@@ -50,6 +50,7 @@ import okhttp3.Response
 import org.jsoup.nodes.Document
 import java.security.MessageDigest
 import java.text.Normalizer
+import java.util.concurrent.atomic.AtomicLong
 
 class IdlixProvider : MainAPI() {
     override var mainUrl = base64Decode("aHR0cHM6Ly96MS5pZGxpeGt1LmNvbQ==")
@@ -64,6 +65,7 @@ class IdlixProvider : MainAPI() {
         TvType.AsianDrama
     )
     private val turnstileInterceptor = IdlixTurnstileInterceptor()
+    private val lastWarmupAt = AtomicLong(0L)
 
     private suspend fun request(url: String, ref: String? = null): NiceResponse {
         return app.get(
@@ -124,7 +126,6 @@ class IdlixProvider : MainAPI() {
         request: MainPageRequest
     ): HomePageResponse {
         val url = if (request.data.contains("%d")) request.data.format(page) else request.data
-        warmupSession()
         val res = requestJson(url).parsedSafe<ApiResponse>()
             ?: return newHomePageResponse(request.name, emptyList())
         val home = res.data.map { item ->
@@ -156,7 +157,6 @@ class IdlixProvider : MainAPI() {
 
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val url = "$mainUrl/api/search?q=$query&page=$page&limit=8"
-        warmupSession()
         val res = requestJson(url).parsedSafe<SearchApiResponse>() ?: return null
         val items = res.results
         val results = items.mapNotNull { item ->
@@ -192,7 +192,6 @@ class IdlixProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        warmupSession()
         val response = requestJson(url)
 
         val data = response.parsedSafe<DetailResponse>()
@@ -363,7 +362,7 @@ class IdlixProvider : MainAPI() {
 
         val contentId = parsed.id
         val contentType = parsed.type
-        warmupSession()
+        warmupSession(force = true)
 
         val ts = System.currentTimeMillis()
         val aclrRes = runCatching {
@@ -415,7 +414,11 @@ class IdlixProvider : MainAPI() {
         return true
     }
 
-    private suspend fun warmupSession() {
+    private suspend fun warmupSession(force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        val recentlyWarmed = now - lastWarmupAt.get() < 10 * 60 * 1000
+        if (!force && recentlyWarmed && turnstileInterceptor.hasAnyCookie(mainUrl)) return
+
         runCatching {
             request(
                 "$mainUrl/",
@@ -427,6 +430,7 @@ class IdlixProvider : MainAPI() {
                 "$mainUrl/"
             )
         }
+        lastWarmupAt.set(System.currentTimeMillis())
     }
 
     private suspend fun unwrapIframeUrl(url: String): String? {
@@ -505,6 +509,11 @@ class IdlixTurnstileInterceptor(
 
     private fun cookieHeader(domainUrl: String): String? {
         return CookieManager.getInstance().getCookie(domainUrl)
+    }
+
+    fun hasAnyCookie(url: String): Boolean {
+        val raw = cookieHeader(url) ?: return false
+        return raw.isNotBlank()
     }
 
     private fun hasClearance(domainUrl: String): Boolean {
