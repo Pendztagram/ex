@@ -26,5 +26,6 @@ class HidoristreamPlugin : Plugin() {
         registerExtractorAPI(Veev())
         registerExtractorAPI(Minochinos())
         registerExtractorAPI(Serhmeplayer())
+        registerExtractorAPI(BuzzServer())
     }
 }

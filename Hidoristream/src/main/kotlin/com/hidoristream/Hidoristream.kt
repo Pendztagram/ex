@@ -259,11 +259,35 @@ class Hidoristream : MainAPI() {
         }
 
         val downloadLinks = document.select("div.dlbox li span.e a[href]")
+            .ifEmpty { document.select("div.soraurlx a[href], div.soraddlx a[href], div.releases a[href]") }
         for (a in downloadLinks) {
             val url = a.attr("href").trim()
-            if (url.isNotBlank()) {
-                loadExtractor(httpsify(url), data, subtitleCallback, callback)
-            }
+            if (url.isBlank()) continue
+
+            val fixedUrl = httpsify(url)
+            val host = fixedUrl.substringAfter("://").substringBefore("/").substringBefore("?")
+            val qualityText = a.parents()
+                .select("strong")
+                .eachText()
+                .firstOrNull()
+                ?: a.parent()?.previousElementSibling()?.text()
+                ?: a.closest("li")?.selectFirst("strong")?.text()
+                ?: "Download"
+            val label = a.text().trim().ifBlank { host }
+
+            loadExtractor(fixedUrl, data, subtitleCallback, callback)
+
+            callback.invoke(
+                newExtractorLink(
+                    source = name,
+                    name = "$name Download - $qualityText - $label",
+                    url = fixedUrl,
+                    type = INFER_TYPE,
+                ) {
+                    this.referer = data
+                    this.quality = getQualityFromName(qualityText)
+                }
+            )
         }
 
         return true
