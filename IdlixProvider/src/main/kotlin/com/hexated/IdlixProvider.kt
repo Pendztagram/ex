@@ -1,13 +1,7 @@
 package com.hexated
 
-import android.annotation.SuppressLint
-import android.os.Handler
-import android.os.Looper
-import android.webkit.CookieManager
-import android.webkit.WebView
-import android.webkit.WebViewClient
+import android.util.Log
 import com.lagradost.cloudstream3.Actor
-import com.lagradost.cloudstream3.AcraApplication
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.ErrorLoadingException
 import com.lagradost.cloudstream3.HomePageResponse
@@ -30,6 +24,7 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.base64Decode
 import com.lagradost.cloudstream3.getQualityFromString
 import com.lagradost.cloudstream3.mainPageOf
+import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.newEpisode
 import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.newMovieLoadResponse
@@ -41,16 +36,11 @@ import com.lagradost.cloudstream3.utils.AppUtils
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.nicehttp.NiceResponse
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Interceptor
-import okhttp3.Response
-import org.jsoup.nodes.Document
+import org.json.JSONObject
 import java.security.MessageDigest
 import java.text.Normalizer
-import java.util.concurrent.atomic.AtomicLong
 
 class IdlixProvider : MainAPI() {
     override var mainUrl = base64Decode("aHR0cHM6Ly96MS5pZGxpeGt1LmNvbQ==")
@@ -64,52 +54,6 @@ class IdlixProvider : MainAPI() {
         TvType.Anime,
         TvType.AsianDrama
     )
-    private val turnstileInterceptor = IdlixTurnstileInterceptor()
-    private val lastWarmupAt = AtomicLong(0L)
-
-    private suspend fun request(url: String, ref: String? = null): NiceResponse {
-        return app.get(
-            url = url,
-            referer = ref,
-            interceptor = turnstileInterceptor,
-            headers = mapOf(
-                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                "User-Agent" to USER_AGENT
-            ),
-            timeout = 15000L
-        )
-    }
-
-    private suspend fun requestJson(url: String, ref: String? = "$mainUrl/"): NiceResponse {
-        return app.get(
-            url = url,
-            referer = ref,
-            interceptor = turnstileInterceptor,
-            headers = mapOf(
-                "Accept" to "application/json, text/plain, */*",
-                "Origin" to mainUrl,
-                "User-Agent" to USER_AGENT
-            ),
-            timeout = 15000L
-        )
-    }
-
-    private suspend fun postJson(url: String, body: String, ref: String? = "$mainUrl/"): NiceResponse {
-        return app.post(
-            url = url,
-            requestBody = body.toRequestBody("application/json".toMediaType()),
-            referer = ref,
-            interceptor = turnstileInterceptor,
-            headers = mapOf(
-                "accept" to "*/*",
-                "content-type" to "application/json",
-                "origin" to mainUrl,
-                "referer" to mainUrl,
-                "user-agent" to USER_AGENT,
-            ),
-            timeout = 15000L
-        )
-    }
 
     override val mainPage = mainPageOf(
         "$mainUrl/api/movies?page=%d&limit=36&sort=createdAt" to "Movie Terbaru",
@@ -126,8 +70,7 @@ class IdlixProvider : MainAPI() {
         request: MainPageRequest
     ): HomePageResponse {
         val url = if (request.data.contains("%d")) request.data.format(page) else request.data
-        val res = requestJson(url).parsedSafe<ApiResponse>()
-            ?: return newHomePageResponse(request.name, emptyList())
+        val res = app.get(url, timeout = 10000L).parsedSafe<ApiResponse>() ?: return newHomePageResponse(request.name, emptyList())
         val home = res.data.map { item ->
             val title = item.title ?: "UnKnown"
             val poster = item.posterPath?.let { "https://image.tmdb.org/t/p/w342$it" }
@@ -153,11 +96,11 @@ class IdlixProvider : MainAPI() {
         return newHomePageResponse(request.name, home)
     }
 
-    override suspend fun quickSearch(query: String): List<SearchResponse>? = search(query, 1)?.items
+    override suspend fun quickSearch(query: String): List<SearchResponse>? = search(query,1)?.items
 
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         val url = "$mainUrl/api/search?q=$query&page=$page&limit=8"
-        val res = requestJson(url).parsedSafe<SearchApiResponse>() ?: return null
+        val res = app.get(url).parsedSafe<SearchApiResponse>() ?: return null
         val items = res.results
         val results = items.mapNotNull { item ->
             val title = item.title
@@ -192,7 +135,7 @@ class IdlixProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val response = requestJson(url)
+        val response = app.get(url, timeout = 10000L)
 
         val data = response.parsedSafe<DetailResponse>()
             ?: throw ErrorLoadingException("Invalid JSON")
@@ -206,7 +149,7 @@ class IdlixProvider : MainAPI() {
             ?.toIntOrNull()
 
         val tags = data.genres?.mapNotNull { it.name } ?: emptyList()
-        val logourl = "https://image.tmdb.org/t/p/w500" + data.logoPath
+        val logourl = "https://image.tmdb.org/t/p/w500"+data.logoPath
         val actors = data.cast?.map {
             Actor(it.name ?: "", it.profilePath?.let { p -> "https://image.tmdb.org/t/p/w185$p" })
         } ?: emptyList()
@@ -221,10 +164,11 @@ class IdlixProvider : MainAPI() {
         }
 
         val recommendations = try {
-            requestJson(relatedUrl, mainUrl)
+            app.get(relatedUrl, referer = mainUrl)
                 .parsedSafe<ApiResponse>()?.data?.mapNotNull { item ->
-                    val recTitle = item.title ?: return@mapNotNull null
-                    val recPoster = item.posterPath?.let { "https://image.tmdb.org/t/p/w342$it" }
+
+                    val title = item.title ?: return@mapNotNull null
+                    val poster = item.posterPath?.let { "https://image.tmdb.org/t/p/w342$it" }
 
                     val link = if (item.contentType == "movie") {
                         "$mainUrl/api/movies/${item.slug}"
@@ -233,21 +177,23 @@ class IdlixProvider : MainAPI() {
                     }
 
                     if (item.contentType == "movie") {
-                        newMovieSearchResponse(recTitle, link, TvType.Movie) {
-                            this.posterUrl = recPoster
+                        newMovieSearchResponse(title, link, TvType.Movie) {
+                            this.posterUrl = poster
                             this.year = (item.releaseDate ?: item.firstAirDate)
                                 ?.substringBefore("-")
                                 ?.toIntOrNull()
                         }
                     } else {
-                        newTvSeriesSearchResponse(recTitle, link, TvType.TvSeries) {
-                            this.posterUrl = recPoster
+                        newTvSeriesSearchResponse(title, link, TvType.TvSeries) {
+                            this.posterUrl = poster
                             this.year = (item.releaseDate ?: item.firstAirDate)
                                 ?.substringBefore("-")
                                 ?.toIntOrNull()
                         }
                     }
+
                 } ?: emptyList()
+
         } catch (_: Exception) {
             emptyList()
         }
@@ -257,12 +203,10 @@ class IdlixProvider : MainAPI() {
 
             data.firstSeason?.episodes?.forEach { ep ->
                 episodes.add(
-                    newEpisode(
-                        LoadData(
-                            id = ep.id ?: return@forEach,
-                            type = "episode"
-                        ).toJson()
-                    ) {
+                    newEpisode( LoadData(
+                        id = ep.id ?: return@forEach,
+                        type = "episode"
+                    ).toJson()) {
                         this.name = ep.name
                         this.season = data.firstSeason.seasonNumber
                         this.episode = ep.episodeNumber
@@ -281,7 +225,7 @@ class IdlixProvider : MainAPI() {
                 val seasonUrl = "$mainUrl/api/series/${data.slug}/season/$seasonNum"
 
                 val seasonData = try {
-                    val res = requestJson(seasonUrl, mainUrl)
+                    val res = app.get(seasonUrl, referer = mainUrl)
                     res.parsedSafe<SeasonWrapper>()?.season
                 } catch (_: Exception) {
                     null
@@ -289,12 +233,10 @@ class IdlixProvider : MainAPI() {
 
                 seasonData?.episodes?.forEach { ep ->
                     episodes.add(
-                        newEpisode(
-                            LoadData(
-                                id = ep.id ?: return@forEach,
-                                type = "episode"
-                            ).toJson()
-                        ) {
+                        newEpisode( LoadData(
+                            id = ep.id ?: return@forEach,
+                            type = "episode"
+                        ).toJson()) {
                             this.name = ep.name
                             this.season = seasonNum
                             this.episode = ep.episodeNumber
@@ -323,15 +265,10 @@ class IdlixProvider : MainAPI() {
                 this.recommendations = recommendations
             }
         } else {
-            newMovieLoadResponse(
-                title,
-                url,
-                TvType.Movie,
-                LoadData(
-                    id = data.id ?: "",
-                    type = "movie"
-                ).toJson()
-            ) {
+            newMovieLoadResponse(title, url, TvType.Movie,  LoadData(
+                id = data.id ?: "",
+                type = "movie"
+            ).toJson()) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = backdrop
                 this.logoUrl = logourl
@@ -354,6 +291,7 @@ class IdlixProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+
         val parsed = try {
             AppUtils.parseJson<LoadData>(data)
         } catch (_: Exception) {
@@ -362,18 +300,13 @@ class IdlixProvider : MainAPI() {
 
         val contentId = parsed.id
         val contentType = parsed.type
-        warmupSession(force = true)
 
         val ts = System.currentTimeMillis()
-        val aclrRes = runCatching {
-            request(
-                "$mainUrl/pagead/ad_frame.js?_=$ts",
-                "$mainUrl/"
-            ).text
-        }.getOrNull().orEmpty()
+        val aclrRes = app.get("$mainUrl/pagead/ad_frame.js?_=$ts").text
         val aclr = Regex("""__aclr\s*=\s*"([a-f0-9]+)"""")
             .find(aclrRes)
             ?.groupValues?.getOrNull(1)
+
 
         val challengejson = """
 {
@@ -382,9 +315,18 @@ class IdlixProvider : MainAPI() {
 }
 """.trimIndent()
 
-        val challengeRes = postJson(
+        val headers = mapOf(
+            "accept" to "*/*",
+            "content-type" to "application/json",
+            "origin" to mainUrl,
+            "referer" to mainUrl,
+            "user-agent" to USER_AGENT,
+        )
+
+        val challengeRes = app.post(
             "$mainUrl/api/watch/challenge",
-            challengejson
+            requestBody = challengejson.toRequestBody("application/json".toMediaType()),
+            headers = headers
         ).parsedSafe<ChallengeResponse>() ?: return false
 
         val nonce = solvePow(
@@ -400,55 +342,36 @@ class IdlixProvider : MainAPI() {
         }
         """.trimIndent()
 
-        val solveRes = postJson(
+        val solveRes = app.post(
             "$mainUrl/api/watch/solve",
-            solvejson
-        ).parsedSafe<SolveResponse>() ?: return false
-        val embedUrl = solveRes.embedUrl?.let { if (it.startsWith("http")) it else "$mainUrl$it" } ?: return false
-        val finalUrl = unwrapIframeUrl(embedUrl) ?: return false
-        if (finalUrl.contains("jeniusplay", true)) {
-            Jeniusplay().getUrl(finalUrl, mainUrl, subtitleCallback, callback)
-        } else {
-            loadExtractor(finalUrl, mainUrl, subtitleCallback, callback)
-        }
+            requestBody = solvejson.toRequestBody("application/json".toMediaType()),
+            headers = mapOf(
+                "accept" to "*/*",
+                "content-type" to "application/json",
+                "origin" to mainUrl,
+                "referer" to mainUrl,
+                "user-agent" to USER_AGENT,
+            )
+        ).text
+
+        val json = JSONObject(solveRes)
+
+        val embedUrl = when {
+            json.has("embedUrl") -> json.optString("embedUrl")
+            json.has("url") -> json.optString("url")
+            else -> null
+        } ?: return false
+
+        val iframeurl = WebViewResolver(
+            interceptUrl = Regex("""/video/"""),
+            additionalUrls = listOf(Regex("""/video/""")),
+            useOkhttp = false,
+            timeout = 15_000L
+        )
+
+        val finalUrl = app.get("$mainUrl${embedUrl}", interceptor = iframeurl).url
+        loadExtractor(finalUrl, mainUrl, subtitleCallback, callback)
         return true
-    }
-
-    private suspend fun warmupSession(force: Boolean = false) {
-        val now = System.currentTimeMillis()
-        val recentlyWarmed = now - lastWarmupAt.get() < 10 * 60 * 1000
-        if (!force && recentlyWarmed && turnstileInterceptor.hasAnyCookie(mainUrl)) return
-
-        runCatching {
-            request(
-                "$mainUrl/",
-            )
-        }
-        runCatching {
-            requestJson(
-                "$mainUrl/api/homepage/ads/surface/preroll",
-                "$mainUrl/"
-            )
-        }
-        lastWarmupAt.set(System.currentTimeMillis())
-    }
-
-    private suspend fun unwrapIframeUrl(url: String): String? {
-        var current = url
-        repeat(5) {
-            val response = request(
-                current,
-                "$mainUrl/"
-            )
-            val next = extractIframeUrl(response.document) ?: return current
-            current = if (next.startsWith("http")) next else "$mainUrl$next"
-        }
-        return current
-    }
-
-    private fun extractIframeUrl(document: Document): String? {
-        val iframe = document.selectFirst("iframe[src], iframe[data-src]") ?: return null
-        return iframe.attr("src").ifBlank { iframe.attr("data-src") }.takeIf { it.isNotBlank() }
     }
 
     fun solvePow(challenge: String, difficulty: Int): Int {
@@ -477,122 +400,32 @@ fun getSearchQuality(check: String?): SearchQuality? {
     val u = Normalizer.normalize(s, Normalizer.Form.NFKC).lowercase()
     val patterns = listOf(
         Regex("\\b(4k|ds4k|uhd|2160p)\\b", RegexOption.IGNORE_CASE) to SearchQuality.FourK,
+
+        // CAM / THEATRE SOURCES FIRST
         Regex("\\b(hdts|hdcam|hdtc)\\b", RegexOption.IGNORE_CASE) to SearchQuality.HdCam,
         Regex("\\b(camrip|cam[- ]?rip)\\b", RegexOption.IGNORE_CASE) to SearchQuality.CamRip,
         Regex("\\b(cam)\\b", RegexOption.IGNORE_CASE) to SearchQuality.Cam,
+
+        // WEB / RIP
         Regex("\\b(web[- ]?dl|webrip|webdl)\\b", RegexOption.IGNORE_CASE) to SearchQuality.WebRip,
+
+        // BLURAY
         Regex("\\b(bluray|bdrip|blu[- ]?ray)\\b", RegexOption.IGNORE_CASE) to SearchQuality.BlueRay,
+
+        // RESOLUTIONS
         Regex("\\b(1440p|qhd)\\b", RegexOption.IGNORE_CASE) to SearchQuality.BlueRay,
         Regex("\\b(1080p|fullhd)\\b", RegexOption.IGNORE_CASE) to SearchQuality.HD,
         Regex("\\b(720p)\\b", RegexOption.IGNORE_CASE) to SearchQuality.SD,
+
+        // GENERIC HD LAST
         Regex("\\b(hdrip|hdtv)\\b", RegexOption.IGNORE_CASE) to SearchQuality.HD,
+
         Regex("\\b(dvd)\\b", RegexOption.IGNORE_CASE) to SearchQuality.DVD,
         Regex("\\b(hq)\\b", RegexOption.IGNORE_CASE) to SearchQuality.HQ,
         Regex("\\b(rip)\\b", RegexOption.IGNORE_CASE) to SearchQuality.CamRip
     )
 
+
     for ((regex, quality) in patterns) if (regex.containsMatchIn(u)) return quality
     return null
-}
-
-class IdlixTurnstileInterceptor(
-    private val cookieName: String = "cf_clearance"
-) : Interceptor {
-    companion object {
-        private const val POLL_INTERVAL_MS = 500L
-        private const val MAX_ATTEMPTS = 40
-    }
-
-    private fun domainUrl(request: Request): String {
-        return "${request.url.scheme}://${request.url.host}"
-    }
-
-    private fun cookieHeader(domainUrl: String): String? {
-        return CookieManager.getInstance().getCookie(domainUrl)
-    }
-
-    fun hasAnyCookie(url: String): Boolean {
-        val raw = cookieHeader(url) ?: return false
-        return raw.isNotBlank()
-    }
-
-    private fun hasClearance(domainUrl: String): Boolean {
-        val raw = cookieHeader(domainUrl) ?: return false
-        return raw.split(";")
-            .map { it.trim() }
-            .any { it.startsWith("$cookieName=") || it.startsWith("_cfuvid=") }
-    }
-
-    private fun clearCookies(domainUrl: String) {
-        CookieManager.getInstance().apply {
-            setCookie(domainUrl, "$cookieName=; Max-Age=0")
-            setCookie(domainUrl, "_cfuvid=; Max-Age=0")
-            flush()
-        }
-    }
-
-    @SuppressLint("SetJavaScriptEnabled")
-    override fun intercept(chain: Interceptor.Chain): Response {
-        val original = chain.request()
-        val domainUrl = domainUrl(original)
-        val cookieManager = CookieManager.getInstance()
-
-        if (hasClearance(domainUrl)) {
-            val attempted = chain.proceed(
-                original.newBuilder()
-                    .header("Cookie", cookieHeader(domainUrl).orEmpty())
-                    .build()
-            )
-            if (attempted.code != 403 && attempted.code != 503) return attempted
-            attempted.close()
-            clearCookies(domainUrl)
-        }
-
-        val context = AcraApplication.context ?: return chain.proceed(original)
-        val handler = Handler(Looper.getMainLooper())
-        var webView: WebView? = null
-        var resolvedUserAgent = original.header("User-Agent") ?: USER_AGENT
-
-        handler.post {
-            try {
-                val wv = WebView(context).also { webView = it }
-                wv.settings.apply {
-                    javaScriptEnabled = true
-                    domStorageEnabled = true
-                    userAgentString = resolvedUserAgent
-                    resolvedUserAgent = userAgentString
-                }
-                wv.webViewClient = WebViewClient()
-                wv.loadUrl(original.url.toString())
-            } catch (_: Exception) {
-            }
-        }
-
-        var attempts = 0
-        while (attempts < MAX_ATTEMPTS) {
-            Thread.sleep(POLL_INTERVAL_MS)
-            if (hasClearance(domainUrl)) {
-                cookieManager.flush()
-                break
-            }
-            attempts++
-        }
-
-        handler.post {
-            try {
-                webView?.stopLoading()
-                webView?.clearCache(false)
-                webView?.destroy()
-                webView = null
-            } catch (_: Exception) {
-            }
-        }
-
-        return chain.proceed(
-            original.newBuilder()
-                .header("Cookie", cookieHeader(domainUrl).orEmpty())
-                .header("User-Agent", resolvedUserAgent)
-                .build()
-        )
-    }
 }
