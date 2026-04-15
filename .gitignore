@@ -36,3 +36,5 @@ _tmp_melolo_chunks
 **/.tmp_*.js
 extcloud-ci4-server
 tmp_idlix_chunk.js
+BstationProvider/.bstation.cookies
+_tmp_bstation_apk

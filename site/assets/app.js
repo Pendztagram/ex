@@ -1,4 +1,4 @@
-const apkUrl = "https://github.com/Pendztagram/ExtCloud/releases/latest/download/ExtCloud.v1.0.1.apk";
+const apkUrl = "https://github.com/Pendztagram/ExtCloud/releases/latest/download/ExtCloud.apk";
 const telegramUrl = "https://t.me/+6287872547461";
 
 document.getElementById("currentYear").textContent = new Date().getFullYear();

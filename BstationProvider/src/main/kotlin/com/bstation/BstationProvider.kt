@@ -1,0 +1,425 @@
+package com.bstation
+
+import com.excloud.BuildConfig
+import com.fasterxml.jackson.annotation.JsonProperty
+import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.AppUtils.parseJson
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import org.jsoup.Jsoup
+import java.net.URLEncoder
+
+class BstationProvider : MainAPI() {
+    override var mainUrl = "https://www.bilibili.tv"
+    override var name = "Bstation"
+    override var lang = "id"
+    override val hasMainPage = true
+    override val hasQuickSearch = true
+    override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie)
+
+    private val locale = "id_ID"
+    private val regionBase = "$mainUrl/id"
+    private val apiBase = "https://api.bilibili.tv/intl/gateway/web/v2"
+    private val playApiBase = "https://api.bilibili.tv/intl/gateway/web"
+    private val cookieHeader = BuildConfig.BSTATION_COOKIE.trim().takeIf { it.isNotBlank() }
+    private val baseHeaders = mapOf(
+        "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    )
+
+    override val mainPage = mainPageOf(
+        "anime" to "Anime Indonesia",
+    )
+
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        if (page != 1) return newHomePageResponse(HomePageList(request.name, emptyList()), hasNext = false)
+
+        val document = app.get("$regionBase/anime", headers = requestHeaders()).document
+        val seasonIds = Regex("""/id/play/(\d+)""")
+            .findAll(document.html())
+            .map { it.groupValues[1] }
+            .distinct()
+            .take(24)
+            .toList()
+
+        val results = seasonIds.mapNotNull { seasonId ->
+            runCatching { fetchSeasonInfo(seasonId)?.toSearchResponse() }.getOrNull()
+        }
+
+        return newHomePageResponse(
+            HomePageList(request.name, results),
+            hasNext = false
+        )
+    }
+
+    override suspend fun quickSearch(query: String): List<SearchResponse>? = search(query)
+
+    override suspend fun search(query: String): List<SearchResponse> {
+        val url = "$regionBase/search-result?q=${query.urlEncoded()}"
+        val document = app.get(url, headers = requestHeaders()).document
+
+        return document.select(".all-sheet__ogv_subject .ogv--season").mapNotNull { card ->
+            val href = card.selectFirst("a[href*=/play/]")?.attr("href")?.toAbsoluteBstationUrl() ?: return@mapNotNull null
+            val title = card.selectFirst(".ogv__content-title p")?.text()?.trim().orEmpty()
+            if (title.isBlank()) return@mapNotNull null
+            val poster = card.selectFirst("img")?.attr("src")
+            val label = card.selectFirst(".cover-mask-text")?.text().orEmpty()
+            newAnimeSearchResponse(title, href, inferType(label, singleEpisode = false)) {
+                this.posterUrl = poster?.normalizeUrl()
+            }
+        }.distinctBy { it.url }
+    }
+
+    override suspend fun load(url: String): LoadResponse {
+        val seasonId = url.extractSeasonId() ?: throw ErrorLoadingException("Season ID Bstation tidak ditemukan")
+        val season = fetchSeasonInfo(seasonId)?.data?.season ?: throw ErrorLoadingException("Season Bstation tidak ditemukan")
+        val sections = fetchEpisodes(seasonId)?.data?.sections.orEmpty()
+        val episodes = sections.flatMap { section ->
+            section.episodes.orEmpty().map { episode ->
+                val watchUrl = "$regionBase/play/$seasonId/${episode.episodeId}"
+                newEpisode(
+                    EpisodeData(
+                        seasonId = seasonId,
+                        episodeId = episode.episodeId ?: "",
+                        watchUrl = watchUrl,
+                    ).toJson()
+                ) {
+                    this.name = episode.titleDisplay ?: episode.longTitleDisplay ?: episode.shortTitleDisplay
+                    this.posterUrl = episode.cover?.normalizeUrl()
+                    this.episode = episode.shortTitleDisplay?.filter { it.isDigit() }?.toIntOrNull()
+                }
+            }
+        }
+
+        val type = inferType(season.indexShow, episodes.size <= 1)
+        return newAnimeLoadResponse(
+            season.title ?: "Bstation",
+            "$regionBase/play/$seasonId",
+            type
+        ) {
+            posterUrl = season.verticalCover?.normalizeUrl()
+            backgroundPosterUrl = season.horizontalCover?.normalizeUrl()
+            plot = season.description
+            tags = season.styles.orEmpty().mapNotNull { style -> style.title }.distinct()
+            year = season.playerDate?.extractYear()
+            showStatus = if (season.isFinished == true) ShowStatus.Completed else ShowStatus.Ongoing
+            addEpisodes(DubStatus.Subbed, episodes)
+        }
+    }
+
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val episodeData = parseJson<EpisodeData>(data)
+        if (episodeData.watchUrl.isBlank()) return false
+
+        var hasLinks = false
+        fetchSubtitleData(episodeData.episodeId).forEach { sub ->
+            val subtitleUrl = (sub.srt?.url ?: sub.ass?.url).orEmpty().normalizeUrl()
+            if (subtitleUrl.isBlank()) return@forEach
+            subtitleCallback(newSubtitleFile(sub.lang ?: sub.langKey ?: "Indonesia", subtitleUrl))
+        }
+
+        fetchPlayUrl(episodeData).forEach { stream ->
+            val streamUrl = stream.videoResource?.url?.normalizeUrl().orEmpty()
+            if (streamUrl.isBlank()) return@forEach
+            callback(
+                newExtractorLink(
+                    source = name,
+                    name = listOfNotNull(name, stream.streamInfo?.descWords).joinToString(" "),
+                    url = streamUrl,
+                    type = inferStreamType(streamUrl)
+                ) {
+                    this.quality = stream.videoResource?.quality.toBstationQuality()
+                    this.referer = "$regionBase/"
+                    this.headers = mapOf(
+                        "Referer" to "$regionBase/",
+                        "Origin" to mainUrl,
+                    )
+                }
+            )
+            hasLinks = true
+        }
+
+        if (hasLinks) return true
+
+        val response = app.get(
+            episodeData.watchUrl,
+            headers = requestHeaders(),
+            referer = "$regionBase/play/${episodeData.seasonId}"
+        )
+        val html = response.text
+        val document = Jsoup.parse(html)
+
+        extractSubtitles(html).forEach { sub ->
+            val subUrl = sub.url?.normalizeUrl().orEmpty()
+            if (subUrl.isBlank()) return@forEach
+            subtitleCallback(newSubtitleFile(sub.title ?: sub.key ?: "Indonesia", subUrl))
+        }
+
+        val mediaCandidates = linkedSetOf<String>()
+        document.select("meta[property=og:video], meta[property=og:video:url]")
+            .mapNotNullTo(mediaCandidates) { it.attr("content").takeIf { value -> value.contains(".m3u8") || value.contains(".mp4") } }
+        Regex("""playUrl:"(https?:\\u002F\\u002F[^"]+)"""").findAll(html)
+            .mapTo(mediaCandidates) { it.groupValues[1].normalizeUrl() }
+        Regex("""https?:\\u002F\\u002F[^"'\\\s<]+(?:m3u8|mp4)[^"'\\\s<]*""").findAll(html)
+            .mapTo(mediaCandidates) { it.value.normalizeUrl() }
+
+        mediaCandidates.forEach { mediaUrl ->
+            callback(
+                newExtractorLink(
+                    source = name,
+                    name = name,
+                    url = mediaUrl,
+                    type = inferStreamType(mediaUrl)
+                ) {
+                    this.quality = Qualities.Unknown.value
+                    this.referer = "$regionBase/"
+                    this.headers = mapOf(
+                        "Referer" to "$regionBase/",
+                        "Origin" to mainUrl,
+                    )
+                }
+            )
+        }
+
+        return mediaCandidates.isNotEmpty()
+    }
+
+    private suspend fun fetchSeasonInfo(seasonId: String): SeasonInfoRoot? {
+        return app.get(
+            "$apiBase/ogv/play/season_info?season_id=$seasonId&platform=web&s_locale=$locale",
+            headers = requestHeaders(),
+            referer = "$regionBase/play/$seasonId"
+        ).parsedSafe<SeasonInfoRoot>()?.takeIf { it.code == 0 }
+    }
+
+    private suspend fun fetchEpisodes(seasonId: String): EpisodesRoot? {
+        return app.get(
+            "$apiBase/ogv/play/episodes?season_id=$seasonId&platform=web&s_locale=$locale",
+            headers = requestHeaders(),
+            referer = "$regionBase/play/$seasonId"
+        ).parsedSafe<EpisodesRoot>()?.takeIf { it.code == 0 }
+    }
+
+    private suspend fun fetchPlayUrl(episodeData: EpisodeData): List<VideoEntry> {
+        val response = app.get(
+            "$playApiBase/playurl?ep_id=${episodeData.episodeId}&platform=web&qn=112&type=0&device=wap&tf=0&force_container=2&s_locale=$locale",
+            headers = requestHeaders(),
+            referer = episodeData.watchUrl
+        ).parsedSafe<PlayUrlRoot>() ?: return emptyList()
+
+        val payload = response.data ?: response.directData ?: return emptyList()
+        return payload.playurl?.video.orEmpty()
+            .filter { it.videoResource?.url.isNullOrBlank().not() }
+            .distinctBy { it.videoResource?.url }
+            .sortedByDescending { it.videoResource?.quality ?: 0 }
+    }
+
+    private suspend fun fetchSubtitleData(episodeId: String): List<VideoSubtitleEntry> {
+        val response = app.get(
+            "$apiBase/subtitle?episode_id=$episodeId&s_locale=$locale",
+            headers = requestHeaders(),
+            referer = "$regionBase/play"
+        ).parsedSafe<SubtitleRoot>() ?: return emptyList()
+
+        return response.data?.videoSubtitle.orEmpty()
+    }
+
+    private fun requestHeaders(): Map<String, String> {
+        return if (cookieHeader == null) {
+            baseHeaders
+        } else {
+            baseHeaders + ("Cookie" to cookieHeader)
+        }
+    }
+
+    private fun SeasonInfoRoot.toSearchResponse(): SearchResponse? {
+        val season = data?.season ?: return null
+        val seasonId = season.seasonId ?: return null
+        val type = inferType(season.indexShow, false)
+        return newAnimeSearchResponse(
+            season.title ?: return null,
+            "$regionBase/play/$seasonId",
+            type
+        ) {
+            this.posterUrl = season.verticalCover?.normalizeUrl()
+        }
+    }
+
+    private fun inferType(label: String?, singleEpisode: Boolean): TvType {
+        return if (singleEpisode || label?.contains("full", true) == true) TvType.AnimeMovie else TvType.Anime
+    }
+
+    private fun inferStreamType(url: String): ExtractorLinkType {
+        return when {
+            url.contains(".mpd", true) -> ExtractorLinkType.DASH
+            url.contains(".m3u8", true) -> ExtractorLinkType.M3U8
+            else -> ExtractorLinkType.VIDEO
+        }
+    }
+
+    private fun extractSubtitles(html: String): List<SubtitleEntry> {
+        val block = Regex("""subtitleList:\[(.*?)]""").find(html)?.groupValues?.getOrNull(1) ?: return emptyList()
+        return Regex("""\{key:"([^"]+)",title:"([^"]*)",url:"([^"]+)"(?:,assUrl:"([^"]*)")?}""")
+            .findAll(block)
+            .map {
+                SubtitleEntry(
+                    key = it.groupValues.getOrNull(1),
+                    title = it.groupValues.getOrNull(2),
+                    url = it.groupValues.getOrNull(3),
+                    assUrl = it.groupValues.getOrNull(4),
+                )
+            }
+            .toList()
+    }
+
+    private fun String.extractSeasonId(): String? = Regex("""/play/(\d+)""").find(this)?.groupValues?.getOrNull(1)
+
+    private fun String.toAbsoluteBstationUrl(): String {
+        return when {
+            startsWith("http://") || startsWith("https://") -> this
+            startsWith("//") -> "https:$this"
+            startsWith("/") -> "$mainUrl$this"
+            else -> "$mainUrl/$this"
+        }
+    }
+
+    private fun String.normalizeUrl(): String {
+        return replace("\\u002F", "/")
+            .replace("\\/", "/")
+            .replace("&amp;", "&")
+    }
+
+    private fun Int?.toBstationQuality(): Int {
+        return when (this) {
+            112, 116 -> Qualities.P1080.value
+            80 -> Qualities.P720.value
+            64, 74 -> Qualities.P480.value
+            32 -> Qualities.P360.value
+            16, 15, 6 -> Qualities.P240.value
+            else -> Qualities.Unknown.value
+        }
+    }
+
+    private fun String.extractYear(): Int? = Regex("""(19|20)\d{2}""").find(this)?.value?.toIntOrNull()
+
+    private fun String.urlEncoded(): String = URLEncoder.encode(this, "UTF-8")
+
+    data class EpisodeData(
+        val seasonId: String,
+        val episodeId: String,
+        val watchUrl: String,
+    )
+
+    data class SubtitleEntry(
+        val key: String? = null,
+        val title: String? = null,
+        val url: String? = null,
+        val assUrl: String? = null,
+    )
+
+    data class PlayUrlRoot(
+        @JsonProperty("code") val code: Int? = null,
+        @JsonProperty("data") val data: PlayUrlPayload? = null,
+        @JsonProperty("playurl") val playurl: PlayUrlData? = null,
+    ) {
+        val directData: PlayUrlPayload?
+            get() = playurl?.let { PlayUrlPayload(playurl = it) }
+    }
+
+    data class PlayUrlPayload(
+        @JsonProperty("playurl") val playurl: PlayUrlData? = null,
+    )
+
+    data class PlayUrlData(
+        @JsonProperty("video") val video: List<VideoEntry>? = null,
+    )
+
+    data class VideoEntry(
+        @JsonProperty("stream_info") val streamInfo: StreamInfoDto? = null,
+        @JsonProperty("video_resource") val videoResource: VideoResourceDto? = null,
+    )
+
+    data class StreamInfoDto(
+        @JsonProperty("desc_words") val descWords: String? = null,
+    )
+
+    data class VideoResourceDto(
+        @JsonProperty("url") val url: String? = null,
+        @JsonProperty("quality") val quality: Int? = null,
+    )
+
+    data class SubtitleRoot(
+        @JsonProperty("code") val code: Int? = null,
+        @JsonProperty("data") val data: SubtitlePayload? = null,
+    )
+
+    data class SubtitlePayload(
+        @JsonProperty("video_subtitle") val videoSubtitle: List<VideoSubtitleEntry>? = null,
+    )
+
+    data class VideoSubtitleEntry(
+        @JsonProperty("lang") val lang: String? = null,
+        @JsonProperty("lang_key") val langKey: String? = null,
+        @JsonProperty("srt") val srt: SubtitleUrlDto? = null,
+        @JsonProperty("ass") val ass: SubtitleUrlDto? = null,
+    )
+
+    data class SubtitleUrlDto(
+        @JsonProperty("url") val url: String? = null,
+    )
+
+    data class SeasonInfoRoot(
+        @JsonProperty("code") val code: Int? = null,
+        @JsonProperty("data") val data: SeasonInfoData? = null,
+    )
+
+    data class SeasonInfoData(
+        @JsonProperty("season") val season: SeasonDto? = null,
+    )
+
+    data class SeasonDto(
+        @JsonProperty("season_id") val seasonId: String? = null,
+        @JsonProperty("title") val title: String? = null,
+        @JsonProperty("description") val description: String? = null,
+        @JsonProperty("index_show") val indexShow: String? = null,
+        @JsonProperty("player_date") val playerDate: String? = null,
+        @JsonProperty("is_finished") val isFinished: Boolean? = null,
+        @JsonProperty("vertical_cover") val verticalCover: String? = null,
+        @JsonProperty("horizontal_cover") val horizontalCover: String? = null,
+        @JsonProperty("styles") val styles: List<StyleDto>? = null,
+    )
+
+    data class StyleDto(
+        @JsonProperty("title") val title: String? = null,
+    )
+
+    data class EpisodesRoot(
+        @JsonProperty("code") val code: Int? = null,
+        @JsonProperty("data") val data: EpisodesData? = null,
+    )
+
+    data class EpisodesData(
+        @JsonProperty("sections") val sections: List<SectionDto>? = null,
+    )
+
+    data class SectionDto(
+        @JsonProperty("title") val title: String? = null,
+        @JsonProperty("episodes") val episodes: List<EpisodeDto>? = null,
+    )
+
+    data class EpisodeDto(
+        @JsonProperty("episode_id") val episodeId: String? = null,
+        @JsonProperty("cover") val cover: String? = null,
+        @JsonProperty("short_title_display") val shortTitleDisplay: String? = null,
+        @JsonProperty("long_title_display") val longTitleDisplay: String? = null,
+        @JsonProperty("title_display") val titleDisplay: String? = null,
+    )
+}
