@@ -1,6 +1,7 @@
 [
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://anichin.club&size=%size%",
+        "fileHash": "sha256-5a1d8c37ca4c67bb547b6851235dddca9f5696b0848ec0a80f0c38f5e5ffcab7",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 32637,
@@ -23,6 +24,7 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://v1.animasu.top&size=%size%",
+        "fileHash": "sha256-62490d1a4b5dc3cd1f3ba5e04f4a314eb528cba98cea476470cb76f7a2272306",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 24893,
@@ -43,6 +45,7 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://154.26.137.28&size=%size%",
+        "fileHash": "sha256-53620eda6031767d21a0a57cda70ea47bf75bd46d2b26213b94daa87c713e623",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 57645,
@@ -63,6 +66,7 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://anoboy.be&size=%size%",
+        "fileHash": "sha256-53cac281b5bb6d5fd50d8a466eb45107efe9199a1a884a3a1af0f11d198c3eef",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 58235,
@@ -84,6 +88,7 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://auratail.vip&size=%size%",
+        "fileHash": "sha256-2acaf24739f86357c581582418e5279e3f6d750b80a07a3e4d5122cc23200ab1",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 36267,
@@ -106,6 +111,7 @@
     {
         "iconUrl": "https://www.themoviedb.org/favicon.ico",
         "jarFileSize": 293310,
+        "fileHash": "sha256-dd8c6ee981fa8ff3a0b2515aba1cbef772abc2072ba47a9df652c6d1fa082b6b",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 62263,
@@ -123,10 +129,12 @@
         "jarUrl": "https://raw.githubusercontent.com/Pendztagram/ex/builds/AutoEmbedProvider.jar",
         "description": "AutoEmbed TMDB-backed movie and TV catalog provider",
         "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/AutoEmbedProvider.cs3",
-        "name": "AutoEmbedProvider"
+        "name": "AutoEmbedProvider",
+        "jarHash": "sha256-ee89a33be73da19d78c13333d1b31345226e47fd36e062bc0d834e2a84a0c67f"
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://azmovies.to&size=%size%",
+        "fileHash": "sha256-9467e21864b03ea06e81a03b7ea45a2d28079118466280bd5ec545635f152033",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 53928,
@@ -145,7 +153,28 @@
         "name": "Azmovies"
     },
     {
+        "fileHash": "sha256-6ea06cce7078242b8c31cdd9c1a3f7f87bb599d9bf0e2290cfe7117d679e33e0",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/Pendztagram/ex",
+        "fileSize": 37046,
+        "status": 1,
+        "language": "id",
+        "authors": [
+            "OpenAI"
+        ],
+        "tvTypes": [
+            "Anime",
+            "AnimeMovie"
+        ],
+        "version": 1,
+        "internalName": "BstationProvider",
+        "description": "Provider anime Bstation region Indonesia",
+        "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/BstationProvider.cs3",
+        "name": "BstationProvider"
+    },
+    {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://donghub.vip&size=%size%",
+        "fileHash": "sha256-101455e5ff9f27b77928538e11f74f96eab1edab621d603c6ec8fa9b0e85b617",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 18879,
@@ -169,6 +198,7 @@
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://db.hafizhibnusyam.my.id&size=%size%",
         "jarFileSize": 133477,
+        "fileHash": "sha256-e584d3fcee1836355041685f8bfea48af28df105a8c0ffc20ba15d41de968b13",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 29727,
@@ -186,10 +216,12 @@
         "jarUrl": "https://raw.githubusercontent.com/Pendztagram/ex/builds/Dramabox.jar",
         "description": "DramaBox API",
         "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/Dramabox.cs3",
-        "name": "Dramabox"
+        "name": "Dramabox",
+        "jarHash": "sha256-a4b9c6abc8887875d3214e160cfaadfa905560fe4bd0f1ff4d235b3279046e75"
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://justilien.com&size=%size%",
+        "fileHash": "sha256-9827f4a515f5c1c84e41e9fb2867e7c170be064f54ab12511fcbcb5fa4a0c62a",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 32571,
@@ -211,6 +243,7 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://filmapik.singles&size=%size%",
+        "fileHash": "sha256-f8f19bb42a8931e3cfb95d6dfac2f3a2c7b5801f731b202e94830d1c21e7f45b",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 23985,
@@ -233,6 +266,7 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://s3.iix.llc&size=%size%",
+        "fileHash": "sha256-53728b30642aee5fb192e6da405f8b87fe666eaa0a2eb5d8a2dcb9b70d614bc5",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 25728,
@@ -254,6 +288,7 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://free-reels.com&size=%size%",
+        "fileHash": "sha256-4a4b75d715b0d96ba28c43d68954b7d898d39591bdaf79f47440030b6a6b6dc6",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 70232,
@@ -274,6 +309,7 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://fufafilm.com&size=%size%",
+        "fileHash": "sha256-4ddecdbfa876f516056060d7b9e8c6ff91cd28e04bdae63abb1f5a0d35d3306d",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 27856,
@@ -296,6 +332,7 @@
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://funmovieslix.com&size=%size%",
         "jarFileSize": 149569,
+        "fileHash": "sha256-ce12fb217eda24d8e884aaf5c0fbfc78ef49e50b4e806cc7a555aa2bccff8e0d",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 37995,
@@ -313,10 +350,12 @@
         "jarUrl": "https://raw.githubusercontent.com/Pendztagram/ex/builds/Funmovieslix.jar",
         "description": "Indonesia Source",
         "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/Funmovieslix.cs3",
-        "name": "Funmovieslix"
+        "name": "Funmovieslix",
+        "jarHash": "sha256-2ec58d380d29bc581736674572fa452daf640b85eb6db4e3d61bce1bcf764817"
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://v2.hidoristream.online&size=%size%",
+        "fileHash": "sha256-e5e8c3654ccca71f8c6d2a7b091c9bf9f0d5d12de5be9899688d7a84f20cdb0d",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 36688,
@@ -339,6 +378,7 @@
     {
         "iconUrl": "https://t0.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://idlixian.com&size=16",
         "jarFileSize": 202195,
+        "fileHash": "sha256-d156bbf46b5221be2b3073fd2603e7005dfd77c3c047c3691845f63308ee060c",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 51398,
@@ -357,10 +397,12 @@
         "internalName": "IdlixProvider",
         "jarUrl": "https://raw.githubusercontent.com/Pendztagram/ex/builds/IdlixProvider.jar",
         "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/IdlixProvider.cs3",
-        "name": "IdlixProvider"
+        "name": "IdlixProvider",
+        "jarHash": "sha256-2fde31f390e6d620461264ed49f51e793e47cdd3f5b05020141680570717f359"
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://tv2.kawanfilm21.co&size=%size%",
+        "fileHash": "sha256-0c59308bf307dac4c692643daa342edcf564ecb772ecad1e08075fe38dc72973",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 24727,
@@ -382,6 +424,7 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://kissasian.cam&size=%size%",
+        "fileHash": "sha256-e265c4224b4bb1238b848c8b64f0feea8a036fb7b88013660ae85c7fbdae8888",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 30015,
@@ -404,6 +447,7 @@
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://kisskh.ovh&size=%size%",
         "jarFileSize": 118598,
+        "fileHash": "sha256-79efc41127c0c4b884950a5294a5ef48d8473b980b71e851c5693f980b1aafe2",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 28416,
@@ -422,10 +466,12 @@
         "internalName": "KisskhProvider",
         "jarUrl": "https://raw.githubusercontent.com/Pendztagram/ex/builds/KisskhProvider.jar",
         "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/KisskhProvider.cs3",
-        "name": "KisskhProvider"
+        "name": "KisskhProvider",
+        "jarHash": "sha256-c81dfa0cdcf78545e09b94d378684448a441714fed54b25f565428437e0d4a3d"
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://klikxxi.fit&size=%size%",
+        "fileHash": "sha256-caefb23ecb07d8c7a0d98bc016590998e0d10818dfdc853bbebd570dfee14492",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 21034,
@@ -446,6 +492,7 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://v17.kuramanime.ink&size=%size%",
+        "fileHash": "sha256-a7705d7831c4f59271f5d68b464298e5a96999a608f3d3b8ea7c7480c330008b",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 50381,
@@ -466,6 +513,7 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://layarasia.site&size=%size%",
+        "fileHash": "sha256-91281ec3436d5eab4c0256b565c66372e8983c367de5108a58a9e7e6840d03a5",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 28416,
@@ -488,6 +536,7 @@
     {
         "iconUrl": "https://www.google.com/s2/favicons?domain=tv7.lk21.am.in&sz=%size%",
         "jarFileSize": 88504,
+        "fileHash": "sha256-090336ba0cbfce3bd51ff8c92ea37bf5bb27f5c8ec9ff60049af963fe09447df",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 23136,
@@ -505,11 +554,13 @@
         "internalName": "LayarKacaProvider",
         "jarUrl": "https://raw.githubusercontent.com/Pendztagram/ex/builds/LayarKacaProvider.jar",
         "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/LayarKacaProvider.cs3",
-        "name": "LayarKacaProvider"
+        "name": "LayarKacaProvider",
+        "jarHash": "sha256-54acf96e08d50b818a9c1db4b5e66ff29af12379af77252f7f8b7c93e6fa7705"
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://melolo.com&size=%size%",
         "jarFileSize": 150037,
+        "fileHash": "sha256-75a32f4cbabc88613e0546c00b860878052499f08043c86ac59b020fcaae669f",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 30776,
@@ -527,10 +578,12 @@
         "jarUrl": "https://raw.githubusercontent.com/Pendztagram/ex/builds/Melolo.jar",
         "description": "Melolo short drama provider",
         "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/Melolo.cs3",
-        "name": "Melolo"
+        "name": "Melolo",
+        "jarHash": "sha256-7000b1c08e640f8f3c6b50b40e53730b18a6b7a29565937eb080e7d63502787e"
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://tv11.melongmovies.com&size=%size%",
+        "fileHash": "sha256-2318ae60878e6577f416895f68a967e0e8299c948e697881da229c104ab66c82",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 22561,
@@ -553,6 +606,7 @@
     {
         "iconUrl": "https://t0.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://ssstik.tv&size=16",
         "jarFileSize": 126937,
+        "fileHash": "sha256-43aa00a45034c77e451af8325afc2347181a82c1f871b21b18ac71017f36971a",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 32354,
@@ -571,10 +625,12 @@
         "internalName": "Midasxxi",
         "jarUrl": "https://raw.githubusercontent.com/Pendztagram/ex/builds/Midasxxi.jar",
         "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/Midasxxi.cs3",
-        "name": "Midasxxi"
+        "name": "Midasxxi",
+        "jarHash": "sha256-a8addc264ece2535968e6bc1edd2161166f4c394610199299ab2f12a1e2673a9"
     },
     {
         "iconUrl": "https://github.com/NivinCNC/CNCVerse-Cloud-Stream-Extension/raw/refs/heads/master/MovieBoxProvider/icon.png",
+        "fileHash": "sha256-b31a54321bc22217382c4ec2ccac86d1e487944e6d3f541ab05ee508ed9cac03",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 38413,
@@ -595,6 +651,7 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://new18.ngefilm.site&size=%size%",
+        "fileHash": "sha256-adbe04e1f790f3e96cbe1b6693cd0928889bdfbbf3cc6f5419f8527de1b3fb73",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 23762,
@@ -616,6 +673,7 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://nomat.site&size=%size%",
+        "fileHash": "sha256-1bb987add854edc2f61320a57d3547bd5d60073686cb3fd11e2d872996452520",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 17458,
@@ -637,6 +695,7 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://s11.nontonanimeid.boats&size=%size%",
+        "fileHash": "sha256-72b743f9e07e4e1d6d85016ed94cd93586cfceb1b9bfb027b90fada3bb1bce2a",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 58169,
@@ -657,6 +716,7 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://anime.oploverz.ac&size=%size%",
+        "fileHash": "sha256-10ab8128cb3c6c25210809d5eda2e284d3f028f1b8a59603e7056af0c2c63f39",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 26944,
@@ -678,6 +738,7 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://45.11.57.243&size=%size%",
+        "fileHash": "sha256-4be315ed15db60c4cd0e3230a23120a8166a41b9cc40c2101114a5dff3e6dd03",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 20819,
@@ -699,6 +760,7 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://otakudesu.cloud&size=%size%",
+        "fileHash": "sha256-c1773279db49af5e6c9eabeacb51d51a71e8cff825ad62a58ef05a298af53ad2",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 24745,
@@ -720,6 +782,7 @@
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://ww03.pencurimovie.bond&size=%size%",
         "jarFileSize": 57530,
+        "fileHash": "sha256-86061670a28645bac4a8feed3adf08df3c40ca4bbdf7deef184af527b6777612",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 15312,
@@ -737,11 +800,13 @@
         "jarUrl": "https://raw.githubusercontent.com/Pendztagram/ex/builds/Pencurimovie.jar",
         "description": "Pencurimovie ",
         "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/Pencurimovie.cs3",
-        "name": "Pencurimovie"
+        "name": "Pencurimovie",
+        "jarHash": "sha256-ce6a9bff6b89a1d2cb560a978fe8efa2b64ba5e67cdfc636d0e1a8444cc04ac4"
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://ww192.pencurimoviesubmalay.motorcycles&size=%size%",
         "jarFileSize": 111548,
+        "fileHash": "sha256-7b25a50714127723a3e4c885ead6a47dbd0adc94c0b190afc1a9ab39f03eba96",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 31246,
@@ -759,10 +824,12 @@
         "jarUrl": "https://raw.githubusercontent.com/Pendztagram/ex/builds/Pmsm.jar",
         "description": "PMSM (Pencuri Movie Sub Malay)",
         "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/Pmsm.cs3",
-        "name": "Pmsm"
+        "name": "Pmsm",
+        "jarHash": "sha256-fcb3087c21861ec902c41b3ef140f0f778ab5341f5309db8aceb7e271c9ca7a4"
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://v1.samehadaku.how&size=%size%",
+        "fileHash": "sha256-7c6ecee00e6e308efc5ee774d10b0d375b2b84f7540687906c0b48b0745e0845",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 17272,
@@ -784,6 +851,7 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://sflix.film&size=%size%",
+        "fileHash": "sha256-23a81c8e1b6a9634c3a6161cc58792af15a2badab64b8bf761d5e15219ba8d3c",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 35668,
@@ -806,6 +874,7 @@
     },
     {
         "iconUrl": "https://github.com/duro92/ExtCloud/blob/main/SoraStream/Icon.png",
+        "fileHash": "sha256-c8f4fddd020d8d75df832c83545b14ee5054a8d03024a1a71a09f15857e262ad",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 179982,
@@ -829,6 +898,7 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://winbu.net&size=%size%",
+        "fileHash": "sha256-0663a033c92ea031bec14ab557354deeac55d566f9ce9c8638a6f0cdc47ee74b",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
         "fileSize": 32843,
