@@ -153,10 +153,10 @@
         "name": "Azmovies"
     },
     {
-        "fileHash": "sha256-6ea06cce7078242b8c31cdd9c1a3f7f87bb599d9bf0e2290cfe7117d679e33e0",
+        "fileHash": "sha256-22cb979e09cf5e3328b4bcf92764d037e8ee81c5b418da2fd6db23505b044c61",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 37046,
+        "fileSize": 48507,
         "status": 1,
         "language": "id",
         "authors": [
