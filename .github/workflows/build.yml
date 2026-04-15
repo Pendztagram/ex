@@ -36,6 +36,7 @@ jobs:
 
       - name: Access Secrets
         env:
+          BSTATION_COOKIE: ${{ secrets.BSTATION_COOKIE }}
           CRUNCHYROLL_BASIC_TOKEN: ${{ secrets.CRUNCHYROLL_BASIC_TOKEN }}
           CRUNCHYROLL_REFRESH_TOKEN: ${{ secrets.CRUNCHYROLL_REFRESH_TOKEN }}
           ANICHI_API: ${{ secrets.ANICHI_API }}
@@ -52,6 +53,9 @@ jobs:
           SUPERSTREAM_FOURTH_API: ${{ secrets.SUPERSTREAM_FOURTH_API }}
         run: |
           cd $GITHUB_WORKSPACE/src
+          if [ -n "$BSTATION_COOKIE" ]; then
+            printf '%s' "$BSTATION_COOKIE" > BstationProvider/.bstation.cookies
+          fi
           echo TMDB_API=${{ secrets.TMDB_API }} >> local.properties
           echo DUMP_API=${{ secrets.DUMP_API }} >> local.properties
           echo DUMP_KEY=${{ secrets.DUMP_KEY }} >> local.properties

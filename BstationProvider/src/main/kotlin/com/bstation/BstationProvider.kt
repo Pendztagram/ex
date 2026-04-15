@@ -24,6 +24,7 @@ class BstationProvider : MainAPI() {
     private val regionBase = "$mainUrl/id"
     private val apiBase = "https://api.bilibili.tv/intl/gateway/web/v2"
     private val playApiBase = "https://api.bilibili.tv/intl/gateway/web"
+    private val legacyApiBase = "https://api.bilibili.tv/intl/gateway/v2"
     private val cookieHeader = BuildConfig.BSTATION_COOKIE.trim().takeIf { it.isNotBlank() }
     private val baseHeaders = mapOf(
         "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -49,8 +50,14 @@ class BstationProvider : MainAPI() {
             runCatching { fetchSeasonInfo(seasonId)?.toSearchResponse() }.getOrNull()
         }
 
+        val fallbackResults = if (results.isEmpty()) {
+            fetchSearchApi("anime", 24)
+        } else {
+            emptyList()
+        }
+
         return newHomePageResponse(
-            HomePageList(request.name, results),
+            HomePageList(request.name, (results + fallbackResults).distinctBy { it.url }),
             hasNext = false
         )
     }
@@ -61,7 +68,7 @@ class BstationProvider : MainAPI() {
         val url = "$regionBase/search-result?q=${query.urlEncoded()}"
         val document = app.get(url, headers = requestHeaders()).document
 
-        return document.select(".all-sheet__ogv_subject .ogv--season").mapNotNull { card ->
+        val htmlResults = document.select(".all-sheet__ogv_subject .ogv--season").mapNotNull { card ->
             val href = card.selectFirst("a[href*=/play/]")?.attr("href")?.toAbsoluteBstationUrl() ?: return@mapNotNull null
             val title = card.selectFirst(".ogv__content-title p")?.text()?.trim().orEmpty()
             if (title.isBlank()) return@mapNotNull null
@@ -71,42 +78,51 @@ class BstationProvider : MainAPI() {
                 this.posterUrl = poster?.normalizeUrl()
             }
         }.distinctBy { it.url }
+
+        return if (htmlResults.isNotEmpty()) {
+            htmlResults
+        } else {
+            fetchSearchApi(query, 20)
+        }
     }
 
     override suspend fun load(url: String): LoadResponse {
         val seasonId = url.extractSeasonId() ?: throw ErrorLoadingException("Season ID Bstation tidak ditemukan")
-        val season = fetchSeasonInfo(seasonId)?.data?.season ?: throw ErrorLoadingException("Season Bstation tidak ditemukan")
+        val season = fetchSeasonInfo(seasonId)?.data?.season
         val sections = fetchEpisodes(seasonId)?.data?.sections.orEmpty()
         val episodes = sections.flatMap { section ->
-            section.episodes.orEmpty().map { episode ->
-                val watchUrl = "$regionBase/play/$seasonId/${episode.episodeId}"
-                newEpisode(
-                    EpisodeData(
-                        seasonId = seasonId,
-                        episodeId = episode.episodeId ?: "",
-                        watchUrl = watchUrl,
-                    ).toJson()
-                ) {
-                    this.name = episode.titleDisplay ?: episode.longTitleDisplay ?: episode.shortTitleDisplay
-                    this.posterUrl = episode.cover?.normalizeUrl()
-                    this.episode = episode.shortTitleDisplay?.filter { it.isDigit() }?.toIntOrNull()
-                }
+            section.episodes.orEmpty().mapNotNull { episode -> episode.toEpisode(seasonId) }
+        }
+
+        if (season != null && episodes.isNotEmpty()) {
+            val type = inferType(season.indexShow, episodes.size <= 1)
+            return newAnimeLoadResponse(
+                season.title ?: "Bstation",
+                "$regionBase/play/$seasonId",
+                type
+            ) {
+                posterUrl = season.verticalCover?.normalizeUrl()
+                backgroundPosterUrl = season.horizontalCover?.normalizeUrl()
+                plot = season.description
+                tags = season.styles.orEmpty().mapNotNull { style -> style.title }.distinct()
+                year = season.playerDate?.extractYear()
+                showStatus = if (season.isFinished == true) ShowStatus.Completed else ShowStatus.Ongoing
+                addEpisodes(DubStatus.Subbed, episodes)
             }
         }
 
-        val type = inferType(season.indexShow, episodes.size <= 1)
+        val legacySeason = fetchLegacySeason(seasonId)?.result
+            ?: throw ErrorLoadingException("Season Bstation tidak ditemukan")
+        val legacyEpisodes = legacySeason.allEpisodes(seasonId)
+        val legacyType = inferType(null, legacyEpisodes.size <= 1)
         return newAnimeLoadResponse(
-            season.title ?: "Bstation",
+            legacySeason.title ?: "Bstation",
             "$regionBase/play/$seasonId",
-            type
+            legacyType
         ) {
-            posterUrl = season.verticalCover?.normalizeUrl()
-            backgroundPosterUrl = season.horizontalCover?.normalizeUrl()
-            plot = season.description
-            tags = season.styles.orEmpty().mapNotNull { style -> style.title }.distinct()
-            year = season.playerDate?.extractYear()
-            showStatus = if (season.isFinished == true) ShowStatus.Completed else ShowStatus.Ongoing
-            addEpisodes(DubStatus.Subbed, episodes)
+            posterUrl = legacySeason.cover?.normalizeUrl()
+            plot = legacySeason.evaluate
+            addEpisodes(DubStatus.Subbed, legacyEpisodes)
         }
     }
 
@@ -229,7 +245,55 @@ class BstationProvider : MainAPI() {
             referer = "$regionBase/play"
         ).parsedSafe<SubtitleRoot>() ?: return emptyList()
 
-        return response.data?.videoSubtitle.orEmpty()
+        val subtitles = response.data?.videoSubtitle.orEmpty()
+        return if (subtitles.isNotEmpty()) {
+            subtitles
+        } else {
+            fetchLegacyEpisode(episodeId)?.data?.subtitles.orEmpty().map {
+                VideoSubtitleEntry(
+                    lang = it.title ?: it.lang,
+                    langKey = it.lang,
+                    srt = SubtitleUrlDto(url = it.url),
+                    ass = null
+                )
+            }
+        }
+    }
+
+    private suspend fun fetchLegacySeason(seasonId: String): LegacySeasonRoot? {
+        return app.get(
+            "$legacyApiBase/ogv/view/app/season?season_id=$seasonId&platform=web&s_locale=$locale",
+            headers = requestHeaders(),
+            referer = "$regionBase/play/$seasonId"
+        ).parsedSafe<LegacySeasonRoot>()
+    }
+
+    private suspend fun fetchLegacyEpisode(episodeId: String): LegacyEpisodeRoot? {
+        return app.get(
+            "$legacyApiBase/ogv/view/app/episode?ep_id=$episodeId&platform=web&s_locale=$locale",
+            headers = requestHeaders(),
+            referer = "$regionBase/play"
+        ).parsedSafe<LegacyEpisodeRoot>()
+    }
+
+    private suspend fun fetchSearchApi(query: String, limit: Int): List<SearchResponse> {
+        val response = app.get(
+            "$apiBase/search_result?keyword=${query.urlEncoded()}&s_locale=$locale&limit=$limit",
+            headers = requestHeaders(),
+            referer = "$regionBase/search-result?q=${query.urlEncoded()}"
+        ).parsedSafe<SearchApiRoot>() ?: return emptyList()
+
+        return response.data?.modules.orEmpty()
+            .flatMap { it.data?.items.orEmpty() }
+            .mapNotNull { item ->
+                val seasonId = item.seasonId ?: return@mapNotNull null
+                val title = item.title?.trim().orEmpty()
+                if (title.isBlank()) return@mapNotNull null
+                newAnimeSearchResponse(title, "$regionBase/play/$seasonId", TvType.Anime) {
+                    posterUrl = (item.cover ?: item.poster ?: item.horizontalCover)?.normalizeUrl()
+                }
+            }
+            .distinctBy { it.url }
     }
 
     private fun requestHeaders(): Map<String, String> {
@@ -280,7 +344,59 @@ class BstationProvider : MainAPI() {
             .toList()
     }
 
-    private fun String.extractSeasonId(): String? = Regex("""/play/(\d+)""").find(this)?.groupValues?.getOrNull(1)
+    private fun EpisodeDto.toEpisode(seasonId: String): Episode? {
+        val currentEpisodeId = episodeId ?: return null
+        val watchUrl = "$regionBase/play/$seasonId/$currentEpisodeId"
+        return newEpisode(
+            EpisodeData(
+                seasonId = seasonId,
+                episodeId = currentEpisodeId,
+                watchUrl = watchUrl,
+            ).toJson()
+        ) {
+            name = titleDisplay ?: longTitleDisplay ?: shortTitleDisplay
+            posterUrl = cover?.normalizeUrl()
+            episode = shortTitleDisplay?.filter { it.isDigit() }?.toIntOrNull()
+        }
+    }
+
+    private fun LegacySeasonData.allEpisodes(seasonId: String): List<Episode> {
+        val merged = linkedMapOf<String, LegacyEpisodeDto>()
+        episodes.orEmpty().forEach { episode ->
+            val id = episode.id?.toString() ?: return@forEach
+            merged[id] = episode
+        }
+        modules.orEmpty().flatMap { it.data?.episodes.orEmpty() }.forEach { episode ->
+            val id = episode.id?.toString() ?: return@forEach
+            merged.putIfAbsent(id, episode)
+        }
+
+        return merged.values.mapNotNull { episode ->
+            val currentEpisodeId = episode.id?.toString() ?: return@mapNotNull null
+            newEpisode(
+                EpisodeData(
+                    seasonId = seasonId,
+                    episodeId = currentEpisodeId,
+                    watchUrl = "$regionBase/play/$seasonId/$currentEpisodeId",
+                ).toJson()
+            ) {
+                val episodeNumber = episode.index?.filter { it.isDigit() }?.toIntOrNull()
+                    ?: episode.title?.toIntOrNull()
+                name = when {
+                    episode.title.isNullOrBlank() -> "Episode ${episodeNumber ?: "?"}"
+                    episode.title?.toIntOrNull() != null -> "Episode ${episode.title}"
+                    else -> episode.title
+                }
+                this.episode = episodeNumber
+                posterUrl = episode.cover?.normalizeUrl()
+            }
+        }
+    }
+
+    private fun String.extractSeasonId(): String? {
+        return Regex("""/(?:play|media)/(\d+)""").find(this)?.groupValues?.getOrNull(1)
+            ?: trim().takeIf { it.all(Char::isDigit) }
+    }
 
     private fun String.toAbsoluteBstationUrl(): String {
         return when {
@@ -376,6 +492,30 @@ class BstationProvider : MainAPI() {
         @JsonProperty("url") val url: String? = null,
     )
 
+    data class SearchApiRoot(
+        @JsonProperty("data") val data: SearchApiData? = null,
+    )
+
+    data class SearchApiData(
+        @JsonProperty("modules") val modules: List<SearchApiModule>? = null,
+    )
+
+    data class SearchApiModule(
+        @JsonProperty("data") val data: SearchApiModuleData? = null,
+    )
+
+    data class SearchApiModuleData(
+        @JsonProperty("items") val items: List<SearchApiItem>? = null,
+    )
+
+    data class SearchApiItem(
+        @JsonProperty("title") val title: String? = null,
+        @JsonProperty("season_id") val seasonId: String? = null,
+        @JsonProperty("cover") val cover: String? = null,
+        @JsonProperty("poster") val poster: String? = null,
+        @JsonProperty("horizontal_cover") val horizontalCover: String? = null,
+    )
+
     data class SeasonInfoRoot(
         @JsonProperty("code") val code: Int? = null,
         @JsonProperty("data") val data: SeasonInfoData? = null,
@@ -421,5 +561,46 @@ class BstationProvider : MainAPI() {
         @JsonProperty("short_title_display") val shortTitleDisplay: String? = null,
         @JsonProperty("long_title_display") val longTitleDisplay: String? = null,
         @JsonProperty("title_display") val titleDisplay: String? = null,
+    )
+
+    data class LegacySeasonRoot(
+        @JsonProperty("result") val result: LegacySeasonData? = null,
+    )
+
+    data class LegacySeasonData(
+        @JsonProperty("title") val title: String? = null,
+        @JsonProperty("cover") val cover: String? = null,
+        @JsonProperty("evaluate") val evaluate: String? = null,
+        @JsonProperty("episodes") val episodes: List<LegacyEpisodeDto>? = null,
+        @JsonProperty("modules") val modules: List<LegacySeasonModule>? = null,
+    )
+
+    data class LegacySeasonModule(
+        @JsonProperty("data") val data: LegacySeasonModuleData? = null,
+    )
+
+    data class LegacySeasonModuleData(
+        @JsonProperty("episodes") val episodes: List<LegacyEpisodeDto>? = null,
+    )
+
+    data class LegacyEpisodeDto(
+        @JsonProperty("id") val id: Long? = null,
+        @JsonProperty("title") val title: String? = null,
+        @JsonProperty("index_show") val index: String? = null,
+        @JsonProperty("cover") val cover: String? = null,
+    )
+
+    data class LegacyEpisodeRoot(
+        @JsonProperty("data") val data: LegacyEpisodeData? = null,
+    )
+
+    data class LegacyEpisodeData(
+        @JsonProperty("subtitles") val subtitles: List<LegacySubtitleDto>? = null,
+    )
+
+    data class LegacySubtitleDto(
+        @JsonProperty("lang") val lang: String? = null,
+        @JsonProperty("title") val title: String? = null,
+        @JsonProperty("url") val url: String? = null,
     )
 }
