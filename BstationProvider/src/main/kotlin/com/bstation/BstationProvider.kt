@@ -38,26 +38,11 @@ class BstationProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         if (page != 1) return newHomePageResponse(HomePageList(request.name, emptyList()), hasNext = false)
 
-        val document = app.get("$regionBase/anime", headers = requestHeaders()).document
-        val seasonIds = Regex("""/id/play/(\d+)""")
-            .findAll(document.html())
-            .map { it.groupValues[1] }
-            .distinct()
-            .take(24)
-            .toList()
-
-        val results = seasonIds.mapNotNull { seasonId ->
-            runCatching { fetchSeasonInfo(seasonId)?.toSearchResponse() }.getOrNull()
-        }
-
-        val fallbackResults = if (results.isEmpty()) {
-            fetchSearchApi("anime", 24)
-        } else {
-            emptyList()
-        }
+        val timelineResults = fetchTimelineApi(40)
+        val fallbackResults = if (timelineResults.isEmpty()) fetchAnimePageFallback(40) else emptyList()
 
         return newHomePageResponse(
-            HomePageList(request.name, (results + fallbackResults).distinctBy { it.url }),
+            HomePageList(request.name, (timelineResults + fallbackResults).distinctBy { it.url }),
             hasNext = false
         )
     }
@@ -79,11 +64,14 @@ class BstationProvider : MainAPI() {
             }
         }.distinctBy { it.url }
 
-        return if (htmlResults.isNotEmpty()) {
-            htmlResults
-        } else {
-            fetchSearchApi(query, 20)
+        if (htmlResults.isNotEmpty()) return htmlResults
+
+        val timelineMatch = fetchTimelineApi(150).filter {
+            it.name.contains(query, ignoreCase = true)
         }
+        if (timelineMatch.isNotEmpty()) return timelineMatch
+
+        return fetchSearchApi(query, 20)
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -294,6 +282,54 @@ class BstationProvider : MainAPI() {
                 }
             }
             .distinctBy { it.url }
+    }
+
+    private suspend fun fetchTimelineApi(limit: Int): List<SearchResponse> {
+        val response = app.get(
+            "$apiBase/ogv/timeline?s_locale=$locale&platform=web",
+            headers = requestHeaders(),
+            referer = "$regionBase/anime"
+        ).parsedSafe<TimelineRoot>() ?: return emptyList()
+
+        return response.data?.items.orEmpty()
+            .flatMap { it.cards.orEmpty() }
+            .mapNotNull { card ->
+                val seasonId = card.seasonId ?: return@mapNotNull null
+                val title = card.title?.trim().orEmpty()
+                if (title.isBlank()) return@mapNotNull null
+                newAnimeSearchResponse(title, "$regionBase/play/$seasonId", TvType.Anime) {
+                    posterUrl = card.cover?.normalizeUrl()
+                }
+            }
+            .distinctBy { it.url }
+            .take(limit)
+    }
+
+    private suspend fun fetchAnimePageFallback(limit: Int): List<SearchResponse> {
+        val document = app.get("$regionBase/anime", headers = requestHeaders()).document
+        val directCards = document.select("a[href*=/id/play/]").mapNotNull { anchor ->
+            val href = anchor.attr("href").toAbsoluteBstationUrl()
+            val seasonId = href.extractSeasonId() ?: return@mapNotNull null
+            val title = anchor.attr("title").trim()
+                .ifBlank { anchor.text().trim() }
+                .ifBlank { return@mapNotNull null }
+            val poster = anchor.selectFirst("img")?.attr("src")
+            newAnimeSearchResponse(title, "$regionBase/play/$seasonId", TvType.Anime) {
+                this.posterUrl = poster?.normalizeUrl()
+            }
+        }
+        if (directCards.isNotEmpty()) return directCards.distinctBy { it.url }.take(limit)
+
+        val seasonIds = Regex("""/id/play/(\d+)""")
+            .findAll(document.html())
+            .map { it.groupValues[1] }
+            .distinct()
+            .take(limit)
+            .toList()
+
+        return seasonIds.map { seasonId ->
+            newAnimeSearchResponse("Anime $seasonId", "$regionBase/play/$seasonId", TvType.Anime)
+        }
     }
 
     private fun requestHeaders(): Map<String, String> {
@@ -514,6 +550,25 @@ class BstationProvider : MainAPI() {
         @JsonProperty("cover") val cover: String? = null,
         @JsonProperty("poster") val poster: String? = null,
         @JsonProperty("horizontal_cover") val horizontalCover: String? = null,
+    )
+
+    data class TimelineRoot(
+        @JsonProperty("code") val code: Int? = null,
+        @JsonProperty("data") val data: TimelineData? = null,
+    )
+
+    data class TimelineData(
+        @JsonProperty("items") val items: List<TimelineDay>? = null,
+    )
+
+    data class TimelineDay(
+        @JsonProperty("cards") val cards: List<TimelineCard>? = null,
+    )
+
+    data class TimelineCard(
+        @JsonProperty("title") val title: String? = null,
+        @JsonProperty("cover") val cover: String? = null,
+        @JsonProperty("season_id") val seasonId: String? = null,
     )
 
     data class SeasonInfoRoot(
