@@ -26,6 +26,18 @@ class BstationProvider : MainAPI() {
     private val playApiBase = "https://api.bilibili.tv/intl/gateway/web"
     private val legacyApiBase = "https://api.bilibili.tv/intl/gateway/v2"
     private val cookieHeader = BuildConfig.BSTATION_COOKIE.trim().takeIf { it.isNotBlank() }
+    private val cookieMap: Map<String, String> by lazy {
+        cookieHeader?.split(";")
+            ?.mapNotNull { token ->
+                val idx = token.indexOf('=')
+                if (idx <= 0) return@mapNotNull null
+                val key = token.substring(0, idx).trim()
+                val value = token.substring(idx + 1).trim()
+                if (key.isBlank() || value.isBlank()) null else key to value
+            }
+            ?.toMap()
+            .orEmpty()
+    }
     private val baseHeaders = mapOf(
         "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
@@ -81,35 +93,44 @@ class BstationProvider : MainAPI() {
         val episodes = sections.flatMap { section ->
             section.episodes.orEmpty().mapNotNull { episode -> episode.toEpisode(seasonId) }
         }
+        val legacySeason = if (season == null || episodes.isEmpty()) {
+            fetchLegacySeason(seasonId)?.result
+        } else {
+            null
+        }
 
-        if (season != null && episodes.isNotEmpty()) {
-            val type = inferType(season.indexShow, episodes.size <= 1)
+        if (episodes.isNotEmpty()) {
+            val type = inferType(season?.indexShow, episodes.size <= 1)
             return newAnimeLoadResponse(
-                season.title ?: "Bstation",
+                season?.title ?: legacySeason?.title ?: "Bstation",
                 "$regionBase/play/$seasonId",
                 type
             ) {
-                posterUrl = season.verticalCover?.normalizeUrl()
-                backgroundPosterUrl = season.horizontalCover?.normalizeUrl()
-                plot = season.description
-                tags = season.styles.orEmpty().mapNotNull { style -> style.title }.distinct()
-                year = season.playerDate?.extractYear()
-                showStatus = if (season.isFinished == true) ShowStatus.Completed else ShowStatus.Ongoing
+                posterUrl = season?.verticalCover?.normalizeUrl() ?: legacySeason?.cover?.normalizeUrl()
+                backgroundPosterUrl = season?.horizontalCover?.normalizeUrl()
+                plot = season?.description ?: legacySeason?.evaluate
+                tags = season?.styles.orEmpty().mapNotNull { style -> style.title }.distinct()
+                year = season?.playerDate?.extractYear()
+                showStatus = when (season?.isFinished) {
+                    true -> ShowStatus.Completed
+                    false -> ShowStatus.Ongoing
+                    null -> null
+                }
                 addEpisodes(DubStatus.Subbed, episodes)
             }
         }
 
-        val legacySeason = fetchLegacySeason(seasonId)?.result
+        val fallbackLegacySeason = legacySeason ?: fetchLegacySeason(seasonId)?.result
             ?: throw ErrorLoadingException("Season Bstation tidak ditemukan")
-        val legacyEpisodes = legacySeason.allEpisodes(seasonId)
+        val legacyEpisodes = fallbackLegacySeason.allEpisodes(seasonId)
         val legacyType = inferType(null, legacyEpisodes.size <= 1)
         return newAnimeLoadResponse(
-            legacySeason.title ?: "Bstation",
+            fallbackLegacySeason.title ?: "Bstation",
             "$regionBase/play/$seasonId",
             legacyType
         ) {
-            posterUrl = legacySeason.cover?.normalizeUrl()
-            plot = legacySeason.evaluate
+            posterUrl = fallbackLegacySeason.cover?.normalizeUrl()
+            plot = fallbackLegacySeason.evaluate
             addEpisodes(DubStatus.Subbed, legacyEpisodes)
         }
     }
@@ -200,6 +221,7 @@ class BstationProvider : MainAPI() {
         return app.get(
             "$apiBase/ogv/play/season_info?season_id=$seasonId&platform=web&s_locale=$locale",
             headers = requestHeaders(),
+            cookies = requestCookies(),
             referer = "$regionBase/play/$seasonId"
         ).parsedSafe<SeasonInfoRoot>()?.takeIf { it.code == 0 }
     }
@@ -208,20 +230,47 @@ class BstationProvider : MainAPI() {
         return app.get(
             "$apiBase/ogv/play/episodes?season_id=$seasonId&platform=web&s_locale=$locale",
             headers = requestHeaders(),
+            cookies = requestCookies(),
             referer = "$regionBase/play/$seasonId"
         ).parsedSafe<EpisodesRoot>()?.takeIf { it.code == 0 }
     }
 
     private suspend fun fetchPlayUrl(episodeData: EpisodeData): List<VideoEntry> {
-        val response = app.get(
-            "$playApiBase/playurl?ep_id=${episodeData.episodeId}&platform=web&qn=112&type=0&device=wap&tf=0&force_container=2&s_locale=$locale",
-            headers = requestHeaders(),
-            referer = episodeData.watchUrl
-        ).parsedSafe<PlayUrlRoot>() ?: return emptyList()
+        val preferredQn = listOf(80, 64, 32, 16)
+        for (qn in preferredQn) {
+            val response = app.get(
+                "$playApiBase/playurl?ep_id=${episodeData.episodeId}&platform=web&qn=$qn&type=0&device=wap&tf=0&force_container=2&s_locale=$locale",
+                headers = requestHeaders(),
+                cookies = requestCookies(),
+                referer = episodeData.watchUrl
+            ).parsedSafe<PlayUrlRoot>()
+            val payload = response?.data ?: response?.directData
+            val streams = payload?.playurl?.video.orEmpty()
+                .filter { it.videoResource?.url.isNullOrBlank().not() }
+                .distinctBy { it.videoResource?.url }
+                .sortedByDescending { it.videoResource?.quality ?: 0 }
+            if (streams.isNotEmpty()) return streams
+        }
 
-        val payload = response.data ?: response.directData ?: return emptyList()
-        return payload.playurl?.video.orEmpty()
-            .filter { it.videoResource?.url.isNullOrBlank().not() }
+        val legacyResponse = app.get(
+            "$legacyApiBase/ogv/playurl?ep_id=${episodeData.episodeId}&platform=web&qn=64&type=mp4&tf=0&s_locale=$locale",
+            headers = requestHeaders(),
+            cookies = requestCookies(),
+            referer = episodeData.watchUrl
+        ).parsedSafe<LegacyPlayUrlRoot>()
+
+        return legacyResponse?.data?.videoInfo?.streamList.orEmpty()
+            .mapNotNull { stream ->
+                val streamUrl = stream.dashVideo?.baseUrl ?: stream.baseUrl
+                if (streamUrl.isNullOrBlank()) return@mapNotNull null
+                VideoEntry(
+                    streamInfo = StreamInfoDto(descWords = stream.streamInfo?.displayDesc),
+                    videoResource = VideoResourceDto(
+                        url = streamUrl,
+                        quality = stream.streamInfo?.quality
+                    )
+                )
+            }
             .distinctBy { it.videoResource?.url }
             .sortedByDescending { it.videoResource?.quality ?: 0 }
     }
@@ -230,6 +279,7 @@ class BstationProvider : MainAPI() {
         val response = app.get(
             "$apiBase/subtitle?episode_id=$episodeId&s_locale=$locale",
             headers = requestHeaders(),
+            cookies = requestCookies(),
             referer = "$regionBase/play"
         ).parsedSafe<SubtitleRoot>() ?: return emptyList()
 
@@ -252,6 +302,7 @@ class BstationProvider : MainAPI() {
         return app.get(
             "$legacyApiBase/ogv/view/app/season?season_id=$seasonId&platform=web&s_locale=$locale",
             headers = requestHeaders(),
+            cookies = requestCookies(),
             referer = "$regionBase/play/$seasonId"
         ).parsedSafe<LegacySeasonRoot>()
     }
@@ -260,6 +311,7 @@ class BstationProvider : MainAPI() {
         return app.get(
             "$legacyApiBase/ogv/view/app/episode?ep_id=$episodeId&platform=web&s_locale=$locale",
             headers = requestHeaders(),
+            cookies = requestCookies(),
             referer = "$regionBase/play"
         ).parsedSafe<LegacyEpisodeRoot>()
     }
@@ -268,6 +320,7 @@ class BstationProvider : MainAPI() {
         val response = app.get(
             "$apiBase/search_result?keyword=${query.urlEncoded()}&s_locale=$locale&limit=$limit",
             headers = requestHeaders(),
+            cookies = requestCookies(),
             referer = "$regionBase/search-result?q=${query.urlEncoded()}"
         ).parsedSafe<SearchApiRoot>() ?: return emptyList()
 
@@ -288,6 +341,7 @@ class BstationProvider : MainAPI() {
         val response = app.get(
             "$apiBase/ogv/timeline?s_locale=$locale&platform=web",
             headers = requestHeaders(),
+            cookies = requestCookies(),
             referer = "$regionBase/anime"
         ).parsedSafe<TimelineRoot>() ?: return emptyList()
 
@@ -339,6 +393,8 @@ class BstationProvider : MainAPI() {
             baseHeaders + ("Cookie" to cookieHeader)
         }
     }
+
+    private fun requestCookies(): Map<String, String> = cookieMap
 
     private fun SeasonInfoRoot.toSearchResponse(): SearchResponse? {
         val season = data?.season ?: return null
@@ -506,6 +562,34 @@ class BstationProvider : MainAPI() {
     data class VideoResourceDto(
         @JsonProperty("url") val url: String? = null,
         @JsonProperty("quality") val quality: Int? = null,
+    )
+
+    data class LegacyPlayUrlRoot(
+        @JsonProperty("code") val code: Int? = null,
+        @JsonProperty("data") val data: LegacyPlayData? = null,
+    )
+
+    data class LegacyPlayData(
+        @JsonProperty("video_info") val videoInfo: LegacyVideoInfo? = null,
+    )
+
+    data class LegacyVideoInfo(
+        @JsonProperty("stream_list") val streamList: List<LegacyStreamItem>? = null,
+    )
+
+    data class LegacyStreamItem(
+        @JsonProperty("stream_info") val streamInfo: LegacyStreamInfo? = null,
+        @JsonProperty("dash_video") val dashVideo: LegacyDashVideo? = null,
+        @JsonProperty("base_url") val baseUrl: String? = null,
+    )
+
+    data class LegacyStreamInfo(
+        @JsonProperty("quality") val quality: Int? = null,
+        @JsonProperty("display_desc") val displayDesc: String? = null,
+    )
+
+    data class LegacyDashVideo(
+        @JsonProperty("base_url") val baseUrl: String? = null,
     )
 
     data class SubtitleRoot(
