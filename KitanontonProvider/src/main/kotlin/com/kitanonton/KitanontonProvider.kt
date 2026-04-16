@@ -153,15 +153,20 @@ class KitanontonProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val response = app.get(data, referer = getBaseUrl(data))
+        val cleanData = data.substringBefore("#")
+        val response = app.get(cleanData, referer = getBaseUrl(cleanData))
         val document = response.document
         val html = response.text
         val referer = response.url
+        val pageBaseUrl = extractBaseUrl(html).ifBlank { mainUrl }
+        val movieId = extractMovieId(html)
+        val requestedEpisode = extractRequestedEpisode(data)
+        val isSeries = html.contains("load_episode_iframe(", true) || cleanData.contains("/watch", true)
 
         val directUrls = linkedSetOf<String>()
         val extractorUrls = linkedSetOf<String>()
 
-        fun addCandidate(raw: String?) {
+        suspend fun addCandidate(raw: String?, candidateReferer: String = referer) {
             val candidate = raw
                 ?.trim()
                 ?.removeSurrounding("\"")
@@ -185,28 +190,39 @@ class KitanontonProvider : MainAPI() {
             }
 
             if (fixed.looksLikeExtractorUrl()) {
-                extractorUrls += fixed
+                val embedded = extractEmbeddedUrl(fixed, candidateReferer)
+                if (embedded != null && embedded != fixed) {
+                    extractorUrls += embedded
+                } else {
+                    extractorUrls += fixed
+                }
             }
         }
 
-        document.select(
-            "iframe[src], iframe[data-src], video[src], video source[src], source[src], a[href]"
-        ).forEach { el ->
-            addCandidate(
-                el.attr("abs:src").ifBlank {
-                    el.attr("src").ifBlank {
-                        el.attr("data-src").ifBlank {
-                            el.attr("abs:href").ifBlank { el.attr("href") }
-                        }
-                    }
-                }
-            )
+        extractPlayerUrls(document, isSeries, pageBaseUrl, movieId, requestedEpisode).forEach { url ->
+            addCandidate(url, referer)
         }
 
-        Regex("""https?://[^"'\\\s<>]+""", RegexOption.IGNORE_CASE)
-            .findAll(html)
-            .map { it.value }
-            .forEach(::addCandidate)
+        if (directUrls.isEmpty() && extractorUrls.isEmpty()) {
+            document.select(
+                "iframe[src], iframe[data-src], video[src], video source[src], source[src], a[href]"
+            ).forEach { el ->
+                addCandidate(
+                    el.attr("abs:src").ifBlank {
+                        el.attr("src").ifBlank {
+                            el.attr("data-src").ifBlank {
+                                el.attr("abs:href").ifBlank { el.attr("href") }
+                            }
+                        }
+                    }
+                )
+            }
+
+            Regex("""https?://[^"'\\\s<>]+""", RegexOption.IGNORE_CASE)
+                .findAll(html)
+                .map { it.value }
+                .forEach { addCandidate(it) }
+        }
 
         directUrls.forEachIndexed { index, link ->
             callback(
@@ -216,7 +232,7 @@ class KitanontonProvider : MainAPI() {
                     link,
                 ) {
                     this.referer = referer
-                    this.quality = getQualityFromName(link) .takeIf { it != Qualities.Unknown.value }
+                    this.quality = getQualityFromName(link).takeIf { it != Qualities.Unknown.value }
                         ?: Qualities.Unknown.value
                 }
             )
@@ -224,10 +240,22 @@ class KitanontonProvider : MainAPI() {
 
         extractorUrls
             .filterNot { it == data }
-            .forEach { link ->
-                runCatching {
+            .forEachIndexed { index, link ->
+                val loaded = runCatching {
                     loadExtractor(link, referer, subtitleCallback, callback)
-                }
+                }.getOrDefault(Unit)
+
+                callback(
+                    newExtractorLink(
+                        name,
+                        "$name Mirror ${index + 1}",
+                        link,
+                    ) {
+                        this.referer = referer
+                        this.quality = getQualityFromName(link).takeIf { it != Qualities.Unknown.value }
+                            ?: Qualities.Unknown.value
+                    }
+                )
             }
 
         return directUrls.isNotEmpty() || extractorUrls.isNotEmpty()
@@ -279,21 +307,34 @@ class KitanontonProvider : MainAPI() {
         val links = linkedMapOf<String, Pair<String, Pair<Int?, Int?>>>()
 
         document.select(
-            "a.btn-eps[href], #list-eps a[href], a[href*='/episode/'], a[href*='ep-'], a[href*='/watch/']"
+            "a.btn-eps, #list-eps a, [id^=episode-], a[href*='/episode/'], a[href*='ep-'], a[href*='/watch/']"
         ).forEachIndexed { index, el ->
-            val href = el.attr("href").trim().takeIf { it.isNotBlank() }?.let(::fixUrl) ?: return@forEachIndexed
-            val insideMain = href.contains(mainUrl, ignoreCase = true) || href.startsWith(mainUrl)
-            if (!insideMain) return@forEachIndexed
             val label = el.text().cleanTitle().ifBlank { "Episode ${index + 1}" }
+            val rawHref = el.attr("href").trim().takeIf {
+                it.isNotBlank() && !it.equals("javascript:void(0);", true) && !it.equals("javascript:void(0)", true)
+            }
             val season = Regex("""season\D+(\d+)""", RegexOption.IGNORE_CASE).find(label)
                 ?.groupValues?.getOrNull(1)?.toIntOrNull()
-                ?: Regex("""season\D+(\d+)""", RegexOption.IGNORE_CASE).find(href)
+                ?: Regex("""season\D+(\d+)""", RegexOption.IGNORE_CASE).find(rawHref.orEmpty())
                     ?.groupValues?.getOrNull(1)?.toIntOrNull()
-            val episode = Regex("""(?:episode|ep)\D*(\d+)""", RegexOption.IGNORE_CASE).find(label)
+            val episode = Regex("""load_(?:movie|episode)_iframe\(\s*\d+\s*,\s*(\d+)\s*\)""", RegexOption.IGNORE_CASE)
+                .find(el.attr("onclick"))
                 ?.groupValues?.getOrNull(1)?.toIntOrNull()
-                ?: Regex("""(?:episode|ep)[-_/ ]?(\d+)""", RegexOption.IGNORE_CASE).find(href)
+                ?: Regex("""(?:episode|ep)\D*(\d+)""", RegexOption.IGNORE_CASE).find(label)
+                ?.groupValues?.getOrNull(1)?.toIntOrNull()
+                ?: Regex("""episode-(\d+)(\d+)""", RegexOption.IGNORE_CASE).find(el.id())
+                    ?.groupValues?.getOrNull(2)?.toIntOrNull()
+                ?: Regex("""episode-(\d+)""", RegexOption.IGNORE_CASE).find(el.id())
+                    ?.groupValues?.getOrNull(1)
+                    ?.drop(1)
+                    ?.toIntOrNull()
+                ?: Regex("""(?:episode|ep)[-_/ ]?(\d+)""", RegexOption.IGNORE_CASE).find(rawHref.orEmpty())
                     ?.groupValues?.getOrNull(1)?.toIntOrNull()
                 ?: (index + 1)
+            val href = rawHref?.let(::fixUrl)
+                ?: "$fallbackWatchUrl?episode=$episode"
+            val insideMain = href.contains(mainUrl, ignoreCase = true) || href.startsWith(mainUrl)
+            if (!insideMain) return@forEachIndexed
             links[href] = label to (season to episode)
         }
 
@@ -381,4 +422,107 @@ class KitanontonProvider : MainAPI() {
         val uri = URI(url)
         return "${uri.scheme}://${uri.host}"
     }
+
+    private suspend fun extractPlayerUrls(
+        document: Document,
+        isSeries: Boolean,
+        baseUrl: String,
+        movieId: String?,
+        requestedEpisode: Int?
+    ): Set<String> {
+        val urls = linkedSetOf<String>()
+        val pattern = Regex(
+            """id=["']episode-(\d+)(\d+)["'][^>]*?(?:data-drive|data-mp4|data-strgo|data-iframe|data-openload)=["'][^"']+["'][^>]*""",
+            RegexOption.IGNORE_CASE
+        )
+
+        document.select("[id^=episode-]").forEach { element ->
+            buildInternalPlayerUrl(element.outerHtml(), isSeries, baseUrl, movieId, requestedEpisode)?.let(urls::add)
+        }
+
+        if (urls.isEmpty()) {
+            pattern.findAll(document.outerHtml()).forEach { match ->
+                buildInternalPlayerUrl(match.value, isSeries, baseUrl, movieId, requestedEpisode)?.let(urls::add)
+            }
+        }
+
+        return urls
+    }
+
+    private fun buildInternalPlayerUrl(
+        raw: String,
+        isSeries: Boolean,
+        baseUrl: String,
+        movieId: String?,
+        requestedEpisode: Int?
+    ): String? {
+        val server = Regex("""episode-(\d+)""", RegexOption.IGNORE_CASE)
+            .find(raw)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.takeIf { it.isNotBlank() }
+            ?: return null
+        val episode = Regex("""load_(?:movie|episode)_iframe\(\s*\d+\s*,\s*(\d+)\s*\)""", RegexOption.IGNORE_CASE)
+            .find(raw)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.takeIf { it.isNotBlank() }
+            ?: server.drop(1).ifBlank { "1" }
+        if (requestedEpisode != null && episode.toIntOrNull() != requestedEpisode) return null
+
+        val drive = Regex("""data-drive=["']([^"']+)["']""", RegexOption.IGNORE_CASE).find(raw)?.groupValues?.getOrNull(1)
+        val mp4 = Regex("""data-mp4=["']([^"']+)["']""", RegexOption.IGNORE_CASE).find(raw)?.groupValues?.getOrNull(1)
+        val strgo = Regex("""data-strgo=["']([^"']+)["']""", RegexOption.IGNORE_CASE).find(raw)?.groupValues?.getOrNull(1)
+        val iframe = Regex("""data-iframe=["']([^"']+)["']""", RegexOption.IGNORE_CASE).find(raw)?.groupValues?.getOrNull(1)
+        val openload = Regex("""data-openload=["']([^"']+)["']""", RegexOption.IGNORE_CASE).find(raw)?.groupValues?.getOrNull(1)
+
+        val seriesType = if (isSeries) "type=series&" else ""
+        val movieQuery = movieId?.let { "&id=$it" }.orEmpty()
+        val episodeQuery = if (isSeries) "&ep=$episode" else ""
+
+        return when (server) {
+            "10" -> drive?.let { "$baseUrl/googledrive/?${seriesType}source=$it$movieQuery$episodeQuery" }
+            "8" -> drive?.let { "$baseUrl/gdrive/?${seriesType}url=$it$movieQuery$episodeQuery" }
+            "7" -> mp4?.let { "$baseUrl/player/?${seriesType}source=$it$movieQuery$episodeQuery" }
+            "6" -> strgo?.let { "$baseUrl/stremagoembed/?${seriesType}source=$it" }
+            "2" -> iframe?.let { "$baseUrl/iembed/?source=$it" }
+            "1" -> openload?.let { "$baseUrl/openloadembed/?${seriesType}source=$it" }
+            else -> iframe?.let { "$baseUrl/iembed/?source=$it" }
+                ?: drive?.let { "$baseUrl/googledrive/?${seriesType}source=$it$movieQuery$episodeQuery" }
+                ?: mp4?.let { "$baseUrl/player/?${seriesType}source=$it$movieQuery$episodeQuery" }
+        }
+    }
+
+    private suspend fun extractEmbeddedUrl(url: String, referer: String): String? {
+        val response = app.get(url, referer = referer)
+        val document = response.document
+        return document.selectFirst("iframe[src], iframe[data-src]")
+            ?.let { iframe ->
+                iframe.attr("abs:src").ifBlank {
+                    iframe.attr("src").ifBlank { iframe.attr("data-src") }
+                }
+            }
+            ?.takeIf { it.isNotBlank() }
+            ?.let(::fixUrl)
+    }
+
+    private fun extractBaseUrl(html: String): String =
+        Regex("""base_url\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+            .find(html)
+            ?.groupValues
+            ?.getOrNull(1)
+            .orEmpty()
+
+    private fun extractMovieId(html: String): String? =
+        Regex("""movieid\s*=\s*["']?(\d+)["']?""", RegexOption.IGNORE_CASE)
+            .find(html)
+            ?.groupValues
+            ?.getOrNull(1)
+
+    private fun extractRequestedEpisode(data: String): Int? =
+        Regex("""[?&](?:episode|ep)=(\d+)""", RegexOption.IGNORE_CASE)
+            .find(data)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
 }
