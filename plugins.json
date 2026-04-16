@@ -493,10 +493,10 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://kitanonton2.guru&size=%size%",
-        "fileHash": "sha256-f6c20363aba4764177af271a2e5231bd1e6baab0fbf06adc4be9c2ed34dfc937",
+        "fileHash": "sha256-76cae9767d465e024ee86071e563ad6c8790f10f46210a63fa467d666ed1b791",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 31862,
+        "fileSize": 30981,
         "status": 1,
         "language": "id",
         "authors": [
