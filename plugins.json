@@ -197,10 +197,10 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://drakorid.co&size=%size%",
-        "fileHash": "sha256-25fde6cd8a2db01196ea2ad4074702873160b81010c977a781e4bf2b50c8f753",
+        "fileHash": "sha256-f6b53b552967e6a38d9734c74ddf826283d9cceb749f5466e3fdeb558b414060",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 21169,
+        "fileSize": 22682,
         "status": 1,
         "language": "id",
         "authors": [
@@ -490,6 +490,29 @@
         "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/KisskhProvider.cs3",
         "name": "KisskhProvider",
         "jarHash": "sha256-c81dfa0cdcf78545e09b94d378684448a441714fed54b25f565428437e0d4a3d"
+    },
+    {
+        "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://kitanonton2.guru&size=%size%",
+        "fileHash": "sha256-c661b76646b292bec290d9af022b107917d5453c1abbcca2e4e1b5df450d1354",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/Pendztagram/ex",
+        "fileSize": 24008,
+        "status": 1,
+        "language": "id",
+        "authors": [
+            "Duro92"
+        ],
+        "tvTypes": [
+            "Movie",
+            "TvSeries",
+            "AsianDrama",
+            "Anime"
+        ],
+        "version": 1,
+        "internalName": "KitanontonProvider",
+        "description": "Kitanonton",
+        "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/KitanontonProvider.cs3",
+        "name": "KitanontonProvider"
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://klikxxi.fit&size=%size%",
