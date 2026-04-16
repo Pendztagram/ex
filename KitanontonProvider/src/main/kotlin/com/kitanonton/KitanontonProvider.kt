@@ -108,8 +108,10 @@ class KitanontonProvider : MainAPI() {
                 ?.attr("href")
                 ?.let(::fixUrl)
                 ?: url
-            val episodes = extractEpisodes(document, watchUrl)
-                .ifEmpty { extractEpisodes(app.get(watchUrl, referer = url).document, watchUrl) }
+            val detailEpisodes = extractEpisodes(document, watchUrl)
+            val episodes = detailEpisodes
+                .takeUnless { it.isWatchPlaceholder(watchUrl) }
+                ?: extractEpisodes(app.get(watchUrl, referer = url).document, watchUrl)
                 .ifEmpty {
                     listOf(
                         newEpisode(watchUrl) {
@@ -240,22 +242,10 @@ class KitanontonProvider : MainAPI() {
 
         extractorUrls
             .filterNot { it == data }
-            .forEachIndexed { index, link ->
-                val loaded = runCatching {
+            .forEach { link ->
+                runCatching {
                     loadExtractor(link, referer, subtitleCallback, callback)
-                }.getOrDefault(Unit)
-
-                callback(
-                    newExtractorLink(
-                        name,
-                        "$name Mirror ${index + 1}",
-                        link,
-                    ) {
-                        this.referer = referer
-                        this.quality = getQualityFromName(link).takeIf { it != Qualities.Unknown.value }
-                            ?: Qualities.Unknown.value
-                    }
-                )
+                }
             }
 
         return directUrls.isNotEmpty() || extractorUrls.isNotEmpty()
@@ -350,6 +340,16 @@ class KitanontonProvider : MainAPI() {
                 this.episode = numbers.second
             }
         }.sortedWith(compareBy({ it.season ?: 1 }, { it.episode ?: 1 }))
+    }
+
+    private fun List<com.lagradost.cloudstream3.Episode>.isWatchPlaceholder(watchUrl: String): Boolean {
+        if (isEmpty()) return true
+        if (size > 1) return false
+
+        val episode = first()
+        val normalizedData = episode.data.substringBefore("#")
+
+        return normalizedData == watchUrl && (episode.episode ?: 1) == 1
     }
 
     private fun fixPagedUrl(path: String, page: Int): String {
