@@ -100,11 +100,17 @@ a {
 }
 
 .hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: space-between;
   gap: 34px;
   align-items: center;
   padding: 58px 0 26px;
+}
+
+.hero-copy {
+  flex: 1 1 0;
+  max-width: 760px;
 }
 
 .eyebrow,
@@ -149,7 +155,11 @@ a {
   position: relative;
   display: grid;
   place-items: center;
-  min-height: 420px;
+  flex: 0 0 clamp(340px, 38vw, 520px);
+  width: 100%;
+  min-height: 0;
+  justify-self: auto;
+  margin-left: auto;
 }
 
 .visual-glow {
@@ -164,7 +174,8 @@ a {
 .hero-logo {
   position: relative;
   z-index: 1;
-  width: min(100%, 520px);
+  width: 100%;
+  max-width: 520px;
   border-radius: 28px;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
 }
@@ -241,12 +252,16 @@ a {
   }
 
   .hero {
-    grid-template-columns: 1fr;
+    flex-direction: column;
+    align-items: flex-start;
     padding-top: 34px;
   }
 
   .hero-visual {
-    min-height: auto;
+    margin-left: 0;
+    max-width: 520px;
+    width: 100%;
+    flex: 0 1 auto;
   }
 }
 

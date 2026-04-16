@@ -1,5 +1,28 @@
 version = 1
 
+android {
+    buildFeatures {
+        buildConfig = true
+    }
+
+    defaultConfig {
+        val cookieFile = project.file(".drakorid.cookies")
+        val cookieValue = if (cookieFile.exists()) {
+            cookieFile.readText(Charsets.UTF_8).trim()
+        } else {
+            ""
+        }
+
+        buildConfigField(
+            "String",
+            "DRAKORID_COOKIE",
+            "\"${cookieValue
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")}\""
+        )
+    }
+}
+
 cloudstream {
     description = "Drakor.id"
     language = "id"

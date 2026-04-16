@@ -1,5 +1,6 @@
 package com.drakorid
 
+import com.excloud.BuildConfig
 import com.lagradost.cloudstream3.HomePageList
 import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.LoadResponse
@@ -34,6 +35,23 @@ class DrakoridProvider : MainAPI() {
     override var lang = "id"
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.AsianDrama, TvType.TvSeries, TvType.Movie)
+    private val cookieHeader = BuildConfig.DRAKORID_COOKIE.trim().takeIf { it.isNotBlank() }
+    private val cookieMap: Map<String, String> by lazy {
+        cookieHeader?.split(";")
+            ?.mapNotNull { token ->
+                val idx = token.indexOf('=')
+                if (idx <= 0) return@mapNotNull null
+                val key = token.substring(0, idx).trim()
+                val value = token.substring(idx + 1).trim()
+                if (key.isBlank() || value.isBlank()) null else key to value
+            }
+            ?.toMap()
+            .orEmpty()
+    }
+    private val baseHeaders = mapOf(
+        "Accept-Language" to "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    )
 
     override val mainPage = mainPageOf(
         "list" to "Terbaru",
@@ -46,7 +64,12 @@ class DrakoridProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val pageNo = if (page <= 0) 1 else page
         val url = "$mainUrl/${request.data}/$pageNo"
-        val document = app.get(url).document
+        val document = app.get(
+            url,
+            headers = requestHeaders(),
+            cookies = requestCookies(),
+            referer = mainUrl
+        ).document
 
         val items = document.select("div.card")
             .mapNotNull { it.toSearchResult() }
@@ -63,14 +86,24 @@ class DrakoridProvider : MainAPI() {
         if (clean.isBlank()) return emptyList()
         val encoded = URLEncoder.encode(clean, "UTF-8")
 
-        val document = app.get("$mainUrl/cari.html?q=$encoded").document
+        val document = app.get(
+            "$mainUrl/cari.html?q=$encoded",
+            headers = requestHeaders(),
+            cookies = requestCookies(),
+            referer = mainUrl
+        ).document
         return document.select("div.card")
             .mapNotNull { it.toSearchResult() }
             .distinctBy { it.url }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url).document
+        val document = app.get(
+            url,
+            headers = requestHeaders(),
+            cookies = requestCookies(),
+            referer = mainUrl
+        ).document
 
         val title = document.selectFirst("h3.title")?.text()?.trim().orEmpty()
         val poster = document.selectFirst("div.product-detail-header center img")?.attr("abs:src")
@@ -159,7 +192,12 @@ class DrakoridProvider : MainAPI() {
 
         visitedPages.forEach { pageUrl ->
             runCatching {
-                val document = app.get(pageUrl).document
+                val document = app.get(
+                    pageUrl,
+                    headers = requestHeaders(),
+                    cookies = requestCookies(),
+                    referer = "$mainUrl/nonton/${linkData.slug}/"
+                ).document
                 directMediaUrls += extractDirectMediaUrls(document)
 
                 document.select("iframe[src], video source[src]")
@@ -191,6 +229,16 @@ class DrakoridProvider : MainAPI() {
 
         return directMediaUrls.isNotEmpty()
     }
+
+    private fun requestHeaders(): Map<String, String> {
+        return if (cookieHeader == null) {
+            baseHeaders
+        } else {
+            baseHeaders + ("Cookie" to cookieHeader)
+        }
+    }
+
+    private fun requestCookies(): Map<String, String> = cookieMap
 
     private fun Element.toSearchResult(): SearchResponse? {
         val linkEl = this.selectFirst("a[href*=/nonton/], a[href*=/go/]") ?: return null
