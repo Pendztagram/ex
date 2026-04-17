@@ -565,7 +565,7 @@ class KitanontonProvider : MainAPI() {
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun resolveJuicyCodesPlayerConfig(
+    private suspend fun resolveJuicyCodesPlayerConfig(
         url: String,
         referer: String,
         callback: (ExtractorLink) -> Unit
