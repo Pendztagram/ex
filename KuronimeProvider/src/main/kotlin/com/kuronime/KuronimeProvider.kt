@@ -65,8 +65,9 @@ class KuronimeProvider : MainAPI() {
         val poster = document.selectFirst("meta[property=og:image]")?.attr("content")
             ?.takeIf { it.isNotBlank() }
             ?.let(::normalizePosterUrl)
-            ?: document.selectFirst(".main-info img, .tb img, .l img, img[itemprop=image]")
+            ?: document.selectFirst(".main-info img[itemprop=image], .tb img[itemprop=image], .l img[itemprop=image], img[itemprop=image], .main-info img:not(.dashicons), .tb img:not(.dashicons), .l img:not(.dashicons)")
                 ?.imageUrl()
+        val posterHeaders = poster?.let(::posterHeaders)
         val plot = document.selectFirst(".conx .const p, .conx p, .entry-content .main-info p")
             ?.text()
             ?.trim()
@@ -106,6 +107,7 @@ class KuronimeProvider : MainAPI() {
             newAnimeLoadResponse(title, fixedUrl, type) {
                 posterUrl = poster
                 backgroundPosterUrl = poster
+                this.posterHeaders = posterHeaders
                 this.plot = plot
                 this.year = year
                 this.tags = tags
@@ -120,6 +122,7 @@ class KuronimeProvider : MainAPI() {
             newMovieLoadResponse(title, playUrl, type, playUrl) {
                 posterUrl = poster
                 backgroundPosterUrl = poster
+                this.posterHeaders = posterHeaders
                 this.plot = plot
                 this.year = year
                 this.tags = tags
@@ -267,12 +270,13 @@ class KuronimeProvider : MainAPI() {
         val title = listOf(
             anchor.attr("title").trim(),
             selectFirst("h2")?.text()?.trim().orEmpty(),
-            selectFirst("img[itemprop=image], .limit img, .imgseries img, img")?.attr("alt")?.trim().orEmpty(),
+            selectFirst(".limit > img[itemprop=image], .imgseries img[itemprop=image], .bsx img[itemprop=image], .limit > img:not(.dashicons), .imgseries img:not(.dashicons), .bsx img:not(.dashicons)")?.attr("alt")?.trim().orEmpty(),
             anchor.text().trim()
         ).firstOrNull { it.isNotBlank() } ?: return null
 
-        val poster = selectFirst("img[itemprop=image], .limit > img, .imgseries img, .bsx img, img")
+        val poster = selectFirst(".limit > img[itemprop=image], .imgseries img[itemprop=image], .bsx img[itemprop=image], .limit > img:not(.dashicons), .imgseries img:not(.dashicons), .bsx img:not(.dashicons)")
             ?.imageUrl()
+        val posterHeaders = poster?.let(::posterHeaders)
         val type = getType(
             selectFirst(".type")?.text()?.trim(),
             href
@@ -280,6 +284,7 @@ class KuronimeProvider : MainAPI() {
 
         return newAnimeSearchResponse(title, href, type) {
             posterUrl = poster
+            this.posterHeaders = posterHeaders
         }
     }
 
@@ -366,6 +371,11 @@ class KuronimeProvider : MainAPI() {
         return wpProxyMatch?.let { proxiedPath ->
             "https://${proxiedPath.trimStart('/')}"
         } ?: fixed
+    }
+
+    private fun posterHeaders(url: String?): Map<String, String>? {
+        val posterUrl = url?.takeIf { it.isNotBlank() } ?: return null
+        return mapOf("Referer" to URI(posterUrl).let { "${it.scheme}://${it.host}/" })
     }
 
     private fun String.isDirectMedia(): Boolean {
