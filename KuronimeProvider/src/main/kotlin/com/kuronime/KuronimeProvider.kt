@@ -20,7 +20,7 @@ import javax.crypto.spec.SecretKeySpec
 
 class KuronimeProvider : MainAPI() {
     override var mainUrl = "https://kuronime.sbs"
-    override var name = "Kuronime"
+    override var name = "Kuronime😤"
     override var lang = "id"
     override val hasMainPage = true
     override val hasDownloadSupport = true
