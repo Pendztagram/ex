@@ -558,10 +558,10 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://kuronime.sbs&size=%size%",
-        "fileHash": "sha256-f92970591c23ab456b77710242170d4b59e2e1de7dfcff5d754853c315bb80f5",
+        "fileHash": "sha256-034344ed9c91860faada1f23bf49448b51ac578b5e2e173c5e20641e3b757d7c",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 37016,
+        "fileSize": 37492,
         "status": 1,
         "language": "id",
         "authors": [
