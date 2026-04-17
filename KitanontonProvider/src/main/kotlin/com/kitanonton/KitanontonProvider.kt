@@ -8,6 +8,7 @@ import com.lagradost.cloudstream3.Score
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.mainPageOf
 import com.lagradost.cloudstream3.newEpisode
@@ -17,6 +18,7 @@ import com.lagradost.cloudstream3.newMovieSearchResponse
 import com.lagradost.cloudstream3.newTvSeriesLoadResponse
 import com.lagradost.cloudstream3.newTvSeriesSearchResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.M3u8Helper.Companion.generateM3u8
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.loadExtractor
@@ -245,6 +247,9 @@ class KitanontonProvider : MainAPI() {
             .forEach { link ->
                 runCatching {
                     loadExtractor(link, referer, subtitleCallback, callback)
+                }
+                runCatching {
+                    resolveJuicyCodesStream(link, referer, callback)
                 }
             }
 
@@ -506,6 +511,48 @@ class KitanontonProvider : MainAPI() {
             ?.let(::fixUrl)
     }
 
+    private suspend fun resolveJuicyCodesStream(
+        url: String,
+        referer: String,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        if (!url.looksLikeJuicyCodesEmbed()) return
+
+        val resolved = app.get(
+            url,
+            referer = referer,
+            interceptor = WebViewResolver(
+                interceptUrl = Regex("""https?://[^"' ]+\.(?:m3u8|mp4)(?:\?[^"' ]*)?""", RegexOption.IGNORE_CASE),
+                additionalUrls = listOf(
+                    Regex("""https?://[^"' ]+/stream/[^"' ]+""", RegexOption.IGNORE_CASE),
+                    Regex("""https?://[^"' ]+\.(?:m3u8|mp4)(?:\?[^"' ]*)?""", RegexOption.IGNORE_CASE)
+                ),
+                useOkhttp = false,
+                timeout = 20_000L
+            )
+        ).url.substringBefore("#")
+
+        when {
+            resolved.contains(".m3u8", true) -> {
+                generateM3u8(name, resolved, url).forEach(callback)
+            }
+
+            resolved.isVideoLike() -> {
+                callback(
+                    newExtractorLink(
+                        name,
+                        "$name Stream",
+                        resolved,
+                    ) {
+                        this.referer = referer
+                        this.quality = getQualityFromName(resolved).takeIf { it != Qualities.Unknown.value }
+                            ?: Qualities.Unknown.value
+                    }
+                )
+            }
+        }
+    }
+
     private fun extractBaseUrl(html: String): String =
         Regex("""base_url\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
             .find(html)
@@ -525,4 +572,11 @@ class KitanontonProvider : MainAPI() {
             ?.groupValues
             ?.getOrNull(1)
             ?.toIntOrNull()
+
+    private fun String.looksLikeJuicyCodesEmbed(): Boolean {
+        val lower = lowercase(Locale.ROOT)
+        if (!lower.startsWith("http")) return false
+        return (lower.contains("/player/") || lower.contains("/embed/")) &&
+            Regex("""https?://\d{1,3}(?:\.\d{1,3}){3}/""").containsMatchIn(lower)
+    }
 }
