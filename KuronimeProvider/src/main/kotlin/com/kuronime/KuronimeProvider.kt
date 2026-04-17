@@ -8,9 +8,15 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import org.json.JSONObject
 import java.net.URI
 import java.net.URLEncoder
+import java.security.MessageDigest
 import java.util.Locale
+import java.util.Base64
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 class KuronimeProvider : MainAPI() {
     override var mainUrl = "https://kuronime.sbs"
@@ -202,13 +208,58 @@ class KuronimeProvider : MainAPI() {
 
         val sourcePayload = encryptedId?.let { fetchSources(it, episodeUrl) }
         val candidates = linkedSetOf<String>()
+        val mirrorPayload = sourcePayload?.mirror?.let(::decodeMirrorPayload)
 
         sourcePayload?.src?.takeIf { it.isNotBlank() }?.let {
+            candidates += "https://player.animeku.org/?data=$it"
+        }
+        sourcePayload?.src_sd?.takeIf { it.isNotBlank() }?.let {
             candidates += "https://player.animeku.org/?data=$it"
         }
         sourcePayload?.blog?.takeIf { it.isNotBlank() }?.let {
             if (xenHash.equals("awar", true) || xenHash.isBlank()) {
                 candidates += "https://blog.animeku.org/player2.php?id=$it"
+            }
+        }
+
+        val extractorReferer = URI(episodeUrl).let { "${it.scheme}://${it.host}/" }
+
+        suspend fun emitExtractor(url: String, label: String) {
+            val cleanUrl = url.trim().substringBefore('#')
+            if (cleanUrl.isBlank() || !emitted.add(cleanUrl)) return
+            runCatching {
+                loadExtractor(cleanUrl, extractorReferer, subtitleCallback, callback)
+            }.onFailure {
+                emitted.remove(cleanUrl)
+            }
+        }
+
+        sourcePayload?.src?.takeIf { it.isNotBlank() }?.let {
+            runCatching {
+                inspectPlayerPage("https://player.animeku.org/?data=$it", episodeUrl)
+            }
+        }
+        sourcePayload?.src_sd?.takeIf { it.isNotBlank() }?.let {
+            runCatching {
+                inspectPlayerPage("https://player.animeku.org/?data=$it", episodeUrl)
+            }
+        }
+        sourcePayload?.blog?.takeIf { it.isNotBlank() }?.let {
+            if (xenHash.equals("awar", true) || xenHash.isBlank()) {
+                runCatching {
+                    inspectPlayerPage("https://blog.animeku.org/player2.php?id=$it", episodeUrl)
+                }
+            }
+        }
+
+        mirrorPayload?.filelions?.let {
+            emitExtractor(it, "$name FILELIONS")
+        }
+        mirrorPayload?.embed.orEmpty().forEach { (qualityLabel, hosts) ->
+            hosts.forEach { (hostName, hostUrl) ->
+                hostUrl?.takeIf { it.isNotBlank() }?.let {
+                    emitExtractor(it, "$name ${qualityLabel.uppercase(Locale.ROOT)} ${hostName.uppercase(Locale.ROOT)}")
+                }
             }
         }
 
@@ -251,11 +302,12 @@ class KuronimeProvider : MainAPI() {
         val title = listOf(
             anchor.attr("title").trim(),
             selectFirst("h2")?.text()?.trim().orEmpty(),
-            selectFirst("img")?.attr("alt")?.trim().orEmpty(),
+            selectFirst("img[itemprop=image], .limit img, .imgseries img, img")?.attr("alt")?.trim().orEmpty(),
             anchor.text().trim()
         ).firstOrNull { it.isNotBlank() } ?: return null
 
-        val poster = selectFirst("img")?.imageUrl()
+        val poster = selectFirst("img[itemprop=image], .limit > img, .imgseries img, .bsx img, img")
+            ?.imageUrl()
         val type = getType(
             selectFirst(".type")?.text()?.trim(),
             href
@@ -294,9 +346,22 @@ class KuronimeProvider : MainAPI() {
         val raw = listOf(
             attr("data-src"),
             attr("data-lazy-src"),
+            attr("data-lazyloaded"),
             attr("src"),
-        ).firstOrNull { it.isNotBlank() }.orEmpty()
-        return raw.takeIf { it.isNotBlank() }?.let(::fixUrl)
+            attr("abs:src"),
+        ).firstOrNull { it.isNotBlank() && !it.contains("controls-play", true) }.orEmpty()
+
+        val fallback = if (raw.isBlank()) {
+            Regex("""(?:data-src|data-lazy-src|src)=['"]?([^'"\s>]+)""", RegexOption.IGNORE_CASE)
+                .find(outerHtml())
+                ?.groupValues
+                ?.getOrNull(1)
+                .orEmpty()
+        } else {
+            raw
+        }
+
+        return fallback.takeIf { it.isNotBlank() && !it.contains("controls-play", true) }?.let(::fixUrl)
     }
 
     private fun buildPageUrl(path: String, page: Int): String {
@@ -359,6 +424,72 @@ class KuronimeProvider : MainAPI() {
         ).parsedSafe<SourcesResponse>()
     }
 
+    private fun decodeMirrorPayload(encoded: String): MirrorPayload? {
+        return runCatching {
+            val wrapperJson = String(Base64.getDecoder().decode(encoded.trim()), Charsets.UTF_8)
+            val wrapper = JSONObject(wrapperJson)
+            val cipherText = Base64.getDecoder().decode(wrapper.getString("ct"))
+            val iv = hexToBytes(wrapper.getString("iv"))
+            val salt = hexToBytes(wrapper.getString("s"))
+            val key = evpBytesToKey(MIRROR_PASSWORD.toByteArray(Charsets.UTF_8), salt, 32)
+
+            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+            cipher.init(
+                Cipher.DECRYPT_MODE,
+                SecretKeySpec(key, "AES"),
+                IvParameterSpec(iv)
+            )
+
+            val decrypted = String(cipher.doFinal(cipherText), Charsets.UTF_8)
+            parseMirrorPayload(JSONObject(decrypted))
+        }.getOrNull()
+    }
+
+    private fun parseMirrorPayload(json: JSONObject): MirrorPayload {
+        fun JSONObject.optNestedMap(): LinkedHashMap<String, LinkedHashMap<String, String?>> {
+            val outer = linkedMapOf<String, LinkedHashMap<String, String?>>()
+            keys().forEach { qualityKey ->
+                val qualityObject = optJSONObject(qualityKey) ?: return@forEach
+                val hosts = linkedMapOf<String, String?>()
+                qualityObject.keys().forEach { hostKey ->
+                    hosts[hostKey] = qualityObject.optString(hostKey).takeIf { it.isNotBlank() && it != "null" }
+                }
+                if (hosts.isNotEmpty()) outer[qualityKey] = hosts
+            }
+            return outer
+        }
+
+        return MirrorPayload(
+            embed = json.optJSONObject("embed")?.optNestedMap().orEmpty(),
+            filelions = json.optString("filelions").takeIf { it.isNotBlank() && it != "null" },
+            blog = json.optString("blog").takeIf { it.isNotBlank() && it != "null" },
+            raw = json.optString("raw").takeIf { it.isNotBlank() && it != "null" },
+        )
+    }
+
+    private fun evpBytesToKey(password: ByteArray, salt: ByteArray, keyLength: Int): ByteArray {
+        val digest = MessageDigest.getInstance("MD5")
+        val generated = ArrayList<Byte>()
+        var block = ByteArray(0)
+
+        while (generated.size < keyLength) {
+            digest.reset()
+            digest.update(block)
+            digest.update(password)
+            digest.update(salt)
+            block = digest.digest()
+            generated.addAll(block.toList())
+        }
+
+        return generated.take(keyLength).toByteArray()
+    }
+
+    private fun hexToBytes(hex: String): ByteArray {
+        return hex.chunked(2)
+            .mapNotNull { it.toIntOrNull(16)?.toByte() }
+            .toByteArray()
+    }
+
     private suspend fun resolveWithWebView(
         url: String,
         referer: String,
@@ -410,4 +541,15 @@ class KuronimeProvider : MainAPI() {
         val src_sd: String? = null,
         val mirror: String? = null,
     )
+
+    private data class MirrorPayload(
+        val embed: Map<String, Map<String, String?>> = emptyMap(),
+        val filelions: String? = null,
+        val blog: String? = null,
+        val raw: String? = null,
+    )
+
+    private companion object {
+        const val MIRROR_PASSWORD = "3&!Z0M,VIZ;dZW=="
+    }
 }
