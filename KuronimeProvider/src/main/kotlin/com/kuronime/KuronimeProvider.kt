@@ -64,6 +64,7 @@ class KuronimeProvider : MainAPI() {
             ?.takeIf { !it.equals(title, true) }
         val poster = document.selectFirst("meta[property=og:image]")?.attr("content")
             ?.takeIf { it.isNotBlank() }
+            ?.let(::normalizePosterUrl)
             ?: document.selectFirst(".main-info img, .tb img, .l img, img[itemprop=image]")
                 ?.imageUrl()
         val plot = document.selectFirst(".conx .const p, .conx p, .entry-content .main-info p")
@@ -144,12 +145,6 @@ class KuronimeProvider : MainAPI() {
             ?.groupValues
             ?.getOrNull(1)
             ?.takeIf { it.isNotBlank() }
-        val xenHash = Regex("""var\s+xenHash\s*=\s*"([^"]+)"""")
-            .find(html)
-            ?.groupValues
-            ?.getOrNull(1)
-            .orEmpty()
-
         val emitted = linkedSetOf<String>()
         suspend fun emitDirect(mediaUrl: String, referer: String, label: String = name) {
             val cleanUrl = mediaUrl.substringBefore('#')
@@ -207,24 +202,11 @@ class KuronimeProvider : MainAPI() {
         }
 
         val sourcePayload = encryptedId?.let { fetchSources(it, episodeUrl) }
-        val candidates = linkedSetOf<String>()
         val mirrorPayload = sourcePayload?.mirror?.let(::decodeMirrorPayload)
-
-        sourcePayload?.src?.takeIf { it.isNotBlank() }?.let {
-            candidates += "https://player.animeku.org/?data=$it"
-        }
-        sourcePayload?.src_sd?.takeIf { it.isNotBlank() }?.let {
-            candidates += "https://player.animeku.org/?data=$it"
-        }
-        sourcePayload?.blog?.takeIf { it.isNotBlank() }?.let {
-            if (xenHash.equals("awar", true) || xenHash.isBlank()) {
-                candidates += "https://blog.animeku.org/player2.php?id=$it"
-            }
-        }
 
         val extractorReferer = URI(episodeUrl).let { "${it.scheme}://${it.host}/" }
 
-        suspend fun emitExtractor(url: String, label: String) {
+        suspend fun emitExtractor(url: String) {
             val cleanUrl = url.trim().substringBefore('#')
             if (cleanUrl.isBlank() || !emitted.add(cleanUrl)) return
             runCatching {
@@ -234,46 +216,29 @@ class KuronimeProvider : MainAPI() {
             }
         }
 
-        sourcePayload?.src?.takeIf { it.isNotBlank() }?.let {
-            runCatching {
-                inspectPlayerPage("https://player.animeku.org/?data=$it", episodeUrl)
-            }
-        }
-        sourcePayload?.src_sd?.takeIf { it.isNotBlank() }?.let {
-            runCatching {
-                inspectPlayerPage("https://player.animeku.org/?data=$it", episodeUrl)
-            }
-        }
-        sourcePayload?.blog?.takeIf { it.isNotBlank() }?.let {
-            if (xenHash.equals("awar", true) || xenHash.isBlank()) {
-                runCatching {
-                    inspectPlayerPage("https://blog.animeku.org/player2.php?id=$it", episodeUrl)
-                }
-            }
-        }
-
         mirrorPayload?.filelions?.let {
-            emitExtractor(it, "$name FILELIONS")
+            emitExtractor(it)
         }
-        mirrorPayload?.embed.orEmpty().forEach { (qualityLabel, hosts) ->
-            hosts.forEach { (hostName, hostUrl) ->
+        mirrorPayload?.embed.orEmpty().forEach { (_, hosts) ->
+            hosts.forEach { (_, hostUrl) ->
                 hostUrl?.takeIf { it.isNotBlank() }?.let {
-                    emitExtractor(it, "$name ${qualityLabel.uppercase(Locale.ROOT)} ${hostName.uppercase(Locale.ROOT)}")
+                    emitExtractor(it)
                 }
             }
         }
 
-        if (candidates.isEmpty()) {
+        if (emitted.isEmpty()) {
+            val candidates = linkedSetOf<String>()
             document.select("iframe[src], iframe[data-src]").forEach { frame ->
                 frame.attr("abs:src").ifBlank {
                     frame.attr("src").ifBlank { frame.attr("data-src") }
                 }.takeIf { it.startsWith("http") }?.let(candidates::add)
             }
-        }
 
-        candidates.forEach { playerUrl ->
-            runCatching {
-                inspectPlayerPage(playerUrl, episodeUrl)
+            candidates.forEach { playerUrl ->
+                runCatching {
+                    inspectPlayerPage(playerUrl, episodeUrl)
+                }
             }
         }
 
@@ -361,7 +326,8 @@ class KuronimeProvider : MainAPI() {
             raw
         }
 
-        return fallback.takeIf { it.isNotBlank() && !it.contains("controls-play", true) }?.let(::fixUrl)
+        return fallback.takeIf { it.isNotBlank() && !it.contains("controls-play", true) }
+            ?.let(::normalizePosterUrl)
     }
 
     private fun buildPageUrl(path: String, page: Int): String {
@@ -388,6 +354,18 @@ class KuronimeProvider : MainAPI() {
             url.startsWith("http://", true) || url.startsWith("https://", true) -> url
             else -> "$mainUrl/${url.trimStart('/')}"
         }
+    }
+
+    private fun normalizePosterUrl(url: String): String {
+        val fixed = fixUrl(url).replace("&amp;", "&")
+        val wpProxyMatch = Regex("""https?://i\d+\.wp\.com/([^?]+)(?:\?.*)?""", RegexOption.IGNORE_CASE)
+            .find(fixed)
+            ?.groupValues
+            ?.getOrNull(1)
+
+        return wpProxyMatch?.let { proxiedPath ->
+            "https://${proxiedPath.trimStart('/')}"
+        } ?: fixed
     }
 
     private fun String.isDirectMedia(): Boolean {
