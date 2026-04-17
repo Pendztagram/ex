@@ -1,5 +1,11 @@
 package com.kitanonton
 
+import android.annotation.SuppressLint
+import android.os.Handler
+import android.os.Looper
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import com.lagradost.cloudstream3.AcraApplication
 import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.MainAPI
@@ -28,6 +34,8 @@ import org.jsoup.nodes.Element
 import java.net.URI
 import java.net.URLEncoder
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class KitanontonProvider : MainAPI() {
     override var mainUrl = "https://kitanonton2.guru"
@@ -247,6 +255,9 @@ class KitanontonProvider : MainAPI() {
             .forEach { link ->
                 runCatching {
                     loadExtractor(link, referer, subtitleCallback, callback)
+                }
+                runCatching {
+                    resolveJuicyCodesPlayerConfig(link, referer, callback)
                 }
                 runCatching {
                     resolveJuicyCodesStream(link, referer, callback)
@@ -551,6 +562,102 @@ class KitanontonProvider : MainAPI() {
                 )
             }
         }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun resolveJuicyCodesPlayerConfig(
+        url: String,
+        referer: String,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        if (!url.looksLikeJuicyCodesEmbed()) return
+
+        val context = AcraApplication.context ?: return
+        val latch = CountDownLatch(1)
+        val handler = Handler(Looper.getMainLooper())
+        var webView: WebView? = null
+        var streamUrl: String? = null
+
+        fun parseSource(payload: String?) {
+            if (payload.isNullOrBlank()) return
+            val cleaned = payload
+                .removePrefix("\"")
+                .removeSuffix("\"")
+                .replace("\\\\/", "/")
+                .replace("\\\"", "\"")
+            streamUrl = Regex("""https?://[^"'\\]+?\.(?:m3u8|mp4)(?:\?[^"'\\]*)?""", RegexOption.IGNORE_CASE)
+                .find(cleaned)
+                ?.value
+                ?.substringBefore("#")
+        }
+
+        handler.post {
+            try {
+                val wv = WebView(context).also { webView = it }
+                wv.settings.javaScriptEnabled = true
+                wv.settings.domStorageEnabled = true
+                wv.webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView, pageUrl: String) {
+                        fun probe(attempt: Int = 0) {
+                            val script = """
+                                (function() {
+                                  try {
+                                    var player = window.jwplayer ? window.jwplayer("jc-player") : null;
+                                    if (!player) return "";
+                                    var item = player.getPlaylistItem ? player.getPlaylistItem() : null;
+                                    if (item) return JSON.stringify(item);
+                                    var cfg = player.getConfig ? player.getConfig() : null;
+                                    if (!cfg) return "";
+                                    return JSON.stringify(cfg.playlist ? cfg.playlist[0] : cfg);
+                                  } catch (e) {
+                                    return "";
+                                  }
+                                })();
+                            """.trimIndent()
+                            view.evaluateJavascript(script) { result ->
+                                parseSource(result)
+                                if (streamUrl != null || attempt >= 12) {
+                                    latch.countDown()
+                                } else {
+                                    handler.postDelayed({ probe(attempt + 1) }, 500L)
+                                }
+                            }
+                        }
+                        probe()
+                    }
+                }
+                wv.loadUrl(url, mapOf("Referer" to referer))
+            } catch (_: Exception) {
+                latch.countDown()
+            }
+        }
+
+        latch.await(8, TimeUnit.SECONDS)
+
+        handler.post {
+            runCatching {
+                webView?.stopLoading()
+                webView?.destroy()
+            }
+        }
+
+        val resolved = streamUrl ?: return
+        if (resolved.contains(".m3u8", true)) {
+            generateM3u8(name, resolved, url).forEach(callback)
+            return
+        }
+
+        callback(
+            newExtractorLink(
+                name,
+                "$name Stream",
+                resolved,
+            ) {
+                this.referer = referer
+                this.quality = getQualityFromName(resolved).takeIf { it != Qualities.Unknown.value }
+                    ?: Qualities.Unknown.value
+            }
+        )
     }
 
     private fun extractBaseUrl(html: String): String =
