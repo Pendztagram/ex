@@ -27,5 +27,5 @@ cloudstream {
 
     iconUrl = "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://kisskh.ovh&size=%size%"
 
-    isCrossPlatform = true
+    isCrossPlatform = false
 }

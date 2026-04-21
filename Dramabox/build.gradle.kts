@@ -17,6 +17,6 @@ cloudstream {
         "TvSeries",
         "AsianDrama",
     )
-    isCrossPlatform = true
+    isCrossPlatform = false
     iconUrl = "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://db.hafizhibnusyam.my.id&size=%size%"
 }
