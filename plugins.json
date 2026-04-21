@@ -673,10 +673,10 @@
     },
     {
         "iconUrl": "https://github.com/NivinCNC/CNCVerse-Cloud-Stream-Extension/raw/refs/heads/master/MovieBoxProvider/icon.png",
-        "fileHash": "sha256-bc1bb6820f329b23600e35b6092c98184b26e790a0ed40314253eacce386702a",
+        "fileHash": "sha256-bb83ddaca917a3ea375a7af0c2bc2d9d74b1bd5ca75a40891efcde1ef9dc1500",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 38414,
+        "fileSize": 38420,
         "status": 1,
         "language": "id",
         "authors": [
@@ -686,7 +686,7 @@
             "Movie",
             "TvSeries"
         ],
-        "version": 11,
+        "version": 12,
         "internalName": "MovieBoxProvider",
         "description": "Multi Language Movies and Series Provider",
         "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/MovieBoxProvider.cs3",
