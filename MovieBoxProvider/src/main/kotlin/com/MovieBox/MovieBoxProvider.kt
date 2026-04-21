@@ -474,7 +474,9 @@ class MovieBoxProvider : MainAPI() {
                 episode = parsed.getQueryParameter("ep")?.toIntOrNull() ?: 0
             }
 
-            if (season <= 0 || episode <= 0) return false
+            // Movies use `se=0&ep=0`. Series episodes should always provide positive values,
+            // but we don't hard-fail here to avoid breaking movie playback.
+            if (season < 0 || episode < 0) return false
 
             val downloadUrl = buildString {
                 append(apiUrl).append("/wefeed-h5api-bff/subject/download")
