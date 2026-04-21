@@ -86,82 +86,60 @@ open class EmturbovidExtractor : ExtractorApi() {
     override val requiresReferer = true
 
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink>? {
-        val ref = referer ?: "$mainUrl/"
+        val page = app.get(url, referer = referer ?: "$mainUrl/")
+        val embedReferer = page.url
 
         val headers = mapOf(
-            "Referer" to "$mainUrl/",
+            "Referer" to embedReferer,
             "Origin" to mainUrl,
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+            "User-Agent" to USER_AGENT,
             "Accept" to "*/*"
         )
 
-        val page = app.get(url, referer = ref)
+        var masterUrl = page.document.selectFirst("#video_player[data-hash]")?.attr("data-hash")
+            ?.trim()
+            .orEmpty()
 
-        val playerScript = page.document
-            .selectXpath("//script[contains(text(),'var urlPlay')]")
-            .html()
-
-        if (playerScript.isBlank()) return null
-
-        var masterUrl = playerScript
-            .substringAfter("var urlPlay = '")
-            .substringBefore("'")
-            .trim()
-
-    
-        if (masterUrl.startsWith("//")) masterUrl = "https:$masterUrl"
-        if (masterUrl.startsWith("/")) masterUrl = mainUrl + masterUrl
-
-        val masterText = app.get(masterUrl, headers = headers).text
-        val lines = masterText.lines()
-
-        val out = mutableListOf<ExtractorLink>()
-
-        for (i in 0 until lines.size) {
-            val line = lines[i].trim()
-            if (!line.startsWith("#EXT-X-STREAM-INF")) continue
-
-            val height = Regex("RESOLUTION=\\d+x(\\d+)")
-                .find(line)
+        if (masterUrl.isBlank()) {
+            val playerScript = page.document.select("script").joinToString("\n") { it.data() }
+            masterUrl = Regex("""var\s+urlPlay\s*=\s*['"]([^'"]+)['"]""")
+                .find(playerScript)
                 ?.groupValues
                 ?.getOrNull(1)
-                ?.toIntOrNull()
-
-            val next = lines.getOrNull(i + 1)?.trim().orEmpty()
-            if (next.isBlank() || next.startsWith("#")) continue
-
-            var variantUrl = next
-            if (variantUrl.startsWith("//")) variantUrl = "https:$variantUrl"
-            else if (variantUrl.startsWith("/")) variantUrl = mainUrl + variantUrl
-
-            val q = height ?: Qualities.Unknown.value
-
-            out += newExtractorLink(
-                source = name,
-                name = name,
-                url = variantUrl,
-                type = ExtractorLinkType.M3U8
-            ) {
-                this.referer = "$mainUrl/"
-                this.headers = headers
-                this.quality = q
-            }
+                .orEmpty()
+                .trim()
         }
 
-        if (out.isEmpty()) {
-            out += newExtractorLink(
+        if (masterUrl.isBlank()) return null
+
+        masterUrl = when {
+            masterUrl.startsWith("//") -> "https:$masterUrl"
+            masterUrl.startsWith("/") -> "$mainUrl$masterUrl"
+            else -> masterUrl
+        }
+
+        val generated = generateM3u8(
+            source = name,
+            name = name,
+            streamUrl = masterUrl,
+            referer = embedReferer,
+            headers = headers
+        ).distinctBy { it.url }
+
+        if (generated.isNotEmpty()) return generated
+
+        return listOf(
+            newExtractorLink(
                 source = name,
                 name = name,
                 url = masterUrl,
                 type = ExtractorLinkType.M3U8
             ) {
-                this.referer = "$mainUrl/"
+                this.referer = embedReferer
                 this.headers = headers
                 this.quality = Qualities.Unknown.value
             }
-        }
-
-        return out
+        )
     }
 }
 
