@@ -10,5 +10,5 @@ cloudstream {
         "TvSeries",
     )
     iconUrl = "https://www.themoviedb.org/favicon.ico"
-    isCrossPlatform = true
+    isCrossPlatform = false
 }
