@@ -29,6 +29,6 @@ cloudstream {
 
     iconUrl = "https://github.com/NivinCNC/CNCVerse-Cloud-Stream-Extension/raw/refs/heads/master/MovieBoxProvider/icon.png"
 
-    requiresResources = true
+    requiresResources = false
     isCrossPlatform = false
 }
