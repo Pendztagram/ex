@@ -734,6 +734,28 @@ object SoraExtractor : SoraStream() {
         )
     }
 
+    suspend fun invokeRiveStream(
+        tmdbId: Int?,
+        season: Int?,
+        episode: Int?,
+        callback: (ExtractorLink) -> Unit,
+    ) {
+        val id = tmdbId ?: return
+        val url = if (season == null) {
+            "$riveStreamAPI/embed/agg?type=movie&id=$id"
+        } else {
+            "$riveStreamAPI/embed/agg?type=tv&id=$id&season=$season&episode=$episode"
+        }
+
+        invokeWebviewEmbedSource(
+            "RiveStream",
+            url,
+            "$riveStreamAPI/",
+            riveStreamAPI,
+            callback
+        )
+    }
+
     suspend fun invokeSmashyStream(
         imdbId: String?,
         season: Int?,
