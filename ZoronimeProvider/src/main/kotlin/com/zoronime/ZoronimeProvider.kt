@@ -160,6 +160,28 @@ class ZoronimeProvider : MainAPI() {
             val cleanUrl = decodeEscaped(iframeUrl)
             if (cleanUrl.isBlank()) return
 
+            if (cleanUrl.contains("desustream.info/dstream", true)) {
+                runCatching {
+                    val jsonUrl = if (cleanUrl.contains("?")) {
+                        "$cleanUrl&mode=json"
+                    } else {
+                        "$cleanUrl?mode=json"
+                    }
+                    val refreshed = app.get(
+                        jsonUrl,
+                        referer = episodeReferer,
+                        headers = mapOf(
+                            "Accept" to "application/json",
+                            "X-Requested-With" to "XMLHttpRequest",
+                        )
+                    ).parsedSafe<ZoronimePlayerRefresh>()?.video
+
+                    if (!refreshed.isNullOrBlank()) {
+                        emitDirect(refreshed, cleanUrl, label)
+                    }
+                }
+            }
+
             runCatching {
                 loadExtractor(cleanUrl, episodeReferer, subtitleCallback, callback)
             }
@@ -275,11 +297,14 @@ class ZoronimeProvider : MainAPI() {
     }
 
     private fun decodeEscaped(value: String): String {
-        return value
-            .replace("\\u002F", "/")
-            .replace("\\/", "/")
-            .replace("&amp;", "&")
-            .trim()
+        var result = value.trim()
+        repeat(3) {
+            result = result
+                .replace("\\u002F", "/")
+                .replace("\\/", "/")
+                .replace("&amp;", "&")
+        }
+        return result
     }
 
     private fun qualityFromName(value: String): Int {
@@ -333,5 +358,9 @@ class ZoronimeProvider : MainAPI() {
 
     private data class ZoronimeServerData(
         @JsonProperty("url") val url: String? = null,
+    )
+
+    private data class ZoronimePlayerRefresh(
+        @JsonProperty("video") val video: String? = null,
     )
 }
