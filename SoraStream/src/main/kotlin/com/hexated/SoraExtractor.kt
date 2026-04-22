@@ -734,6 +734,28 @@ object SoraExtractor : SoraStream() {
         )
     }
 
+    suspend fun invokeSmashyStream(
+        imdbId: String?,
+        season: Int?,
+        episode: Int?,
+        callback: (ExtractorLink) -> Unit,
+    ) {
+        val cleanImdbId = imdbId?.takeIf { it.isNotBlank() } ?: return
+        val url = if (season == null) {
+            "$smashyStreamAPI/playere.php?imdb=$cleanImdbId"
+        } else {
+            "$smashyStreamAPI/playere.php?imdb=$cleanImdbId&season=$season&episode=$episode"
+        }
+
+        invokeWebviewEmbedSource(
+            "SmashyStream",
+            url,
+            "https://smashystream.com/",
+            "https://smashystream.com",
+            callback
+        )
+    }
+
     suspend fun invokeVembed(
         tmdbId: Int?,
         imdbId: String?,

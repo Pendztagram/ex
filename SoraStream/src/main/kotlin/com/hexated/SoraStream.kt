@@ -18,6 +18,7 @@ import com.hexated.SoraExtractor.invokeVidsrcMov
 import com.hexated.SoraExtractor.invokeVembed
 import com.hexated.SoraExtractor.invokeAzmovies
 import com.hexated.SoraExtractor.invokeNoxx
+import com.hexated.SoraExtractor.invokeSmashyStream
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.metaproviders.TmdbProvider
@@ -75,6 +76,7 @@ open class SoraStream : TmdbProvider() {
         const val twoEmbedAPI = "https://www.2embedstream.xyz"
         const val vidsrcMovAPI = "https://vidsrc.mov"
         const val vembedAPI = "https://vembed.stream"
+        const val smashyStreamAPI = "https://embed.smashystream.com"
 
         fun getType(t: String?): TvType {
             return when (t) {
@@ -366,6 +368,14 @@ open class SoraStream : TmdbProvider() {
             },
             {
                 invokeVidsrcMov(res.id, res.imdbId, res.season, res.episode, callback)
+            },
+            {
+                invokeSmashyStream(
+                    res.imdbId,
+                    res.season,
+                    res.episode,
+                    callback
+                )
             },
             {
                 if (res.season == null) invokeVembed(res.id, res.imdbId, res.season, callback)
