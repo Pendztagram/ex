@@ -17,6 +17,7 @@ import com.hexated.SoraExtractor.invokeWatchsomuch
 import com.hexated.SoraExtractor.invokeWyzie
 import com.hexated.SoraExtractor.invokeXprime
 import com.hexated.SoraExtractor.invokeRiveStream
+import com.hexated.SoraExtractor.invokeCineSrc
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.metaproviders.TmdbProvider
@@ -59,7 +60,7 @@ open class SoraStream : TmdbProvider() {
 
         /** ALL SOURCES */
         const val gomoviesAPI = "https://gomovies-online.cam"
-        const val idlixAPI = "https://tv6.idlixku.com"
+        const val idlixAPI = "https://z1.idlixku.com"
         const val vidsrcccAPI = "https://vidsrc.cc"
         const val vidSrcAPI = "https://vidsrc.net"
         const val xprimeAPI = "https://backend.xprime.tv"
@@ -73,6 +74,7 @@ open class SoraStream : TmdbProvider() {
         const val superembedAPI = "https://multiembed.mov"
         const val vidrockAPI = "https://vidrock.net"
         const val RiveStreamAPI = "https://rivestream.org"
+        const val cinesrcAPI = "https://cinesrc.st"
 
         fun getType(t: String?): TvType {
             return when (t) {
@@ -379,6 +381,9 @@ open class SoraStream : TmdbProvider() {
             },
             {
                 invokeVidfast(res.id, res.season, res.episode, subtitleCallback, callback)
+            },
+            {
+                invokeCineSrc(res.id, res.season, res.episode, callback)
             },
             {
                 invokeMapple(res.id, res.season, res.episode, subtitleCallback, callback)

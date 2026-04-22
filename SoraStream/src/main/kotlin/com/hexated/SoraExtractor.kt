@@ -156,13 +156,21 @@ object SoraExtractor : SoraStream() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val fixTitle = title?.createSlug()
+        val fixTitle = title?.createSlug() ?: return
         val url = if (season == null) {
             "$idlixAPI/movie/$fixTitle-$year"
         } else {
             "$idlixAPI/episode/$fixTitle-season-$season-episode-$episode"
         }
-        invokeWpmovies("Idlix", url, subtitleCallback, callback, encrypt = true)
+        invokeWpmovies(
+            "Idlix",
+            url,
+            subtitleCallback,
+            callback,
+            encrypt = true,
+            hasCloudflare = true,
+            interceptor = wpRedisInterceptor
+        )
     }
 
     private suspend fun invokeWpmovies(
@@ -662,6 +670,51 @@ object SoraExtractor : SoraStream() {
             )
         }
 
+    }
+
+    suspend fun invokeCineSrc(
+        tmdbId: Int?,
+        season: Int?,
+        episode: Int?,
+        callback: (ExtractorLink) -> Unit,
+    ) {
+        val url = if (season == null) {
+            "$cinesrcAPI/embed/movie/$tmdbId"
+        } else {
+            "$cinesrcAPI/embed/tv/$tmdbId?s=$season&e=$episode"
+        }
+
+        val mediaRes = app.get(
+            url,
+            interceptor = WebViewResolver(
+                Regex("""https?://[^"'\\s]+?\.(?:m3u8|mp4)(?:\?[^"'\\s]*)?"""),
+                timeout = 20_000L
+            )
+        )
+
+        val mediaUrl = mediaRes.url
+        val mediaType = when {
+            mediaUrl.contains(".m3u8", ignoreCase = true) -> ExtractorLinkType.M3U8
+            mediaUrl.contains(".mp4", ignoreCase = true) -> INFER_TYPE
+            else -> return
+        }
+
+        callback.invoke(
+            newExtractorLink(
+                "CineSrc",
+                "CineSrc",
+                mediaUrl,
+                mediaType
+            ) {
+                this.referer = "$cinesrcAPI/"
+                this.headers = mapOf(
+                    "Accept" to "*/*",
+                    "Referer" to "$cinesrcAPI/",
+                    "Origin" to cinesrcAPI,
+                    "User-Agent" to USER_AGENT,
+                )
+            }
+        )
     }
 
     suspend fun invokeVixsrc(
