@@ -741,15 +741,71 @@ object SoraExtractor : SoraStream() {
         callback: (ExtractorLink) -> Unit,
     ) {
         val id = tmdbId ?: return
-        val url = if (season == null) {
-            "$riveStreamAPI/embed/agg?type=movie&id=$id"
+        val type = if (season == null) "movie" else "tv"
+        val watchUrl = if (season == null) {
+            "$riveStreamAPI/watch?type=$type&id=$id"
         } else {
-            "$riveStreamAPI/embed/agg?type=tv&id=$id&season=$season&episode=$episode"
+            "$riveStreamAPI/watch?type=$type&id=$id&season=$season&episode=$episode"
+        }
+
+        val externalRes = app.get(
+            watchUrl,
+            interceptor = WebViewResolver(
+                Regex("""https?://(?!([^/]+\.)?rivestream\.org(?:/|$))[^"'\\s]+"""),
+                timeout = 30_000L
+            )
+        )
+
+        val externalUrl = externalRes.url
+        if (!externalUrl.contains("rivestream.org", true)) {
+            if (loadVidsrcXpass(externalUrl, season != null, "$riveStreamAPI/", callback)) return
+
+            var emitted = false
+            loadExtractor(externalUrl, "$riveStreamAPI/", { _: SubtitleFile -> }) { link ->
+                emitted = true
+                callback.invoke(link)
+            }
+            if (emitted) return
+
+            if (externalUrl.contains(".m3u8", true) || externalUrl.contains(".mp4", true)) {
+                callback.invoke(
+                    newExtractorLink(
+                        "RiveStream",
+                        "RiveStream",
+                        externalUrl,
+                        if (externalUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else INFER_TYPE
+                    ) {
+                        this.referer = "$riveStreamAPI/"
+                        this.headers = mapOf(
+                            "Accept" to "*/*",
+                            "Referer" to "$riveStreamAPI/",
+                            "Origin" to riveStreamAPI,
+                            "User-Agent" to USER_AGENT,
+                        )
+                    }
+                )
+                return
+            }
+
+            invokeWebviewEmbedSource(
+                "RiveStream",
+                externalUrl,
+                "$riveStreamAPI/",
+                getBaseUrl(externalUrl),
+                callback
+            )
+            return
+        }
+
+        val aggUrl = if (season == null) {
+            "$riveStreamAPI/embed/agg?type=$type&id=$id"
+        } else {
+            "$riveStreamAPI/embed/agg?type=$type&id=$id&season=$season&episode=$episode"
         }
 
         invokeWebviewEmbedSource(
             "RiveStream",
-            url,
+            aggUrl,
             "$riveStreamAPI/",
             riveStreamAPI,
             callback
