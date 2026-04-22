@@ -957,10 +957,10 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://zoronime.online&size=%size%",
-        "fileHash": "sha256-d8c28e7beb884d1d84428e3c3e58e36dfbcda194e699386296498c19be7ac469",
+        "fileHash": "sha256-272c6091352a347dc0ef1e85472bd3fa7650682c8814a5270ed4f394d7f3047f",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 28013,
+        "fileSize": 29629,
         "status": 1,
         "language": "id",
         "authors": [
