@@ -717,6 +717,109 @@ object SoraExtractor : SoraStream() {
         )
     }
 
+    private suspend fun invokeWebviewEmbedSource(
+        sourceName: String,
+        pageUrl: String,
+        referer: String,
+        origin: String,
+        callback: (ExtractorLink) -> Unit,
+    ) {
+        val mediaRes = app.get(
+            pageUrl,
+            interceptor = WebViewResolver(
+                Regex("""https?://[^"'\\s]+?\.(?:m3u8|mp4)(?:\?[^"'\\s]*)?"""),
+                timeout = 20_000L
+            )
+        )
+
+        val mediaUrl = mediaRes.url
+        val mediaType = when {
+            mediaUrl.contains(".m3u8", ignoreCase = true) -> ExtractorLinkType.M3U8
+            mediaUrl.contains(".mp4", ignoreCase = true) -> INFER_TYPE
+            else -> return
+        }
+
+        callback.invoke(
+            newExtractorLink(
+                sourceName,
+                sourceName,
+                mediaUrl,
+                mediaType
+            ) {
+                this.referer = referer
+                this.headers = mapOf(
+                    "Accept" to "*/*",
+                    "Referer" to referer,
+                    "Origin" to origin,
+                    "User-Agent" to USER_AGENT,
+                )
+            }
+        )
+    }
+
+    suspend fun invokeMafiaEmbed(
+        tmdbId: Int?,
+        season: Int?,
+        episode: Int?,
+        callback: (ExtractorLink) -> Unit,
+    ) {
+        val url = if (season == null) {
+            "$mafiaEmbedAPI/embed/movie/$tmdbId"
+        } else {
+            "$mafiaEmbedAPI/embed/tv/$tmdbId/$season/$episode"
+        }
+
+        invokeWebviewEmbedSource(
+            "MafiaEmbed",
+            url,
+            "$mafiaEmbedAPI/",
+            mafiaEmbedAPI,
+            callback
+        )
+    }
+
+    suspend fun invokeAutoEmbed(
+        tmdbId: Int?,
+        season: Int?,
+        episode: Int?,
+        callback: (ExtractorLink) -> Unit,
+    ) {
+        val url = if (season == null) {
+            "$autoEmbedAPI/movie/tmdb/$tmdbId"
+        } else {
+            "$autoEmbedAPI/tv/tmdb/$tmdbId-$season-$episode"
+        }
+
+        invokeWebviewEmbedSource(
+            "AutoEmbed",
+            url,
+            "$autoEmbedAPI/",
+            autoEmbedAPI,
+            callback
+        )
+    }
+
+    suspend fun invoke2Embed(
+        tmdbId: Int?,
+        season: Int?,
+        episode: Int?,
+        callback: (ExtractorLink) -> Unit,
+    ) {
+        val url = if (season == null) {
+            "$twoEmbedAPI/embed/movie/$tmdbId"
+        } else {
+            "$twoEmbedAPI/embed/tv/$tmdbId/$season/$episode"
+        }
+
+        invokeWebviewEmbedSource(
+            "2Embed",
+            url,
+            "$twoEmbedAPI/",
+            twoEmbedAPI,
+            callback
+        )
+    }
+
     suspend fun invokeVixsrc(
         tmdbId: Int?,
         season: Int?,

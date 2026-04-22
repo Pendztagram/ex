@@ -18,6 +18,9 @@ import com.hexated.SoraExtractor.invokeWyzie
 import com.hexated.SoraExtractor.invokeXprime
 import com.hexated.SoraExtractor.invokeRiveStream
 import com.hexated.SoraExtractor.invokeCineSrc
+import com.hexated.SoraExtractor.invokeMafiaEmbed
+import com.hexated.SoraExtractor.invokeAutoEmbed
+import com.hexated.SoraExtractor.invoke2Embed
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.metaproviders.TmdbProvider
@@ -75,6 +78,9 @@ open class SoraStream : TmdbProvider() {
         const val vidrockAPI = "https://vidrock.net"
         const val RiveStreamAPI = "https://rivestream.org"
         const val cinesrcAPI = "https://cinesrc.st"
+        const val mafiaEmbedAPI = "https://embed.streammafia.to"
+        const val autoEmbedAPI = "https://autoembed.co"
+        const val twoEmbedAPI = "https://www.2embedstream.xyz"
 
         fun getType(t: String?): TvType {
             return when (t) {
@@ -384,6 +390,15 @@ open class SoraStream : TmdbProvider() {
             },
             {
                 invokeCineSrc(res.id, res.season, res.episode, callback)
+            },
+            {
+                invokeMafiaEmbed(res.id, res.season, res.episode, callback)
+            },
+            {
+                invokeAutoEmbed(res.id, res.season, res.episode, callback)
+            },
+            {
+                invoke2Embed(res.id, res.season, res.episode, callback)
             },
             {
                 invokeMapple(res.id, res.season, res.episode, subtitleCallback, callback)
