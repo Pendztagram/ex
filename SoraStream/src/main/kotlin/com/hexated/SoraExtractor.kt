@@ -820,6 +820,47 @@ object SoraExtractor : SoraStream() {
         )
     }
 
+    suspend fun invokeVidsrcMov(
+        tmdbId: Int?,
+        imdbId: String?,
+        season: Int?,
+        episode: Int?,
+        callback: (ExtractorLink) -> Unit,
+    ) {
+        val id = imdbId ?: tmdbId?.toString() ?: return
+        val url = if (season == null) {
+            "$vidsrcMovAPI/embed/movie/$id"
+        } else {
+            "$vidsrcMovAPI/embed/tv/$id/$season/$episode"
+        }
+
+        invokeWebviewEmbedSource(
+            "VidSrcMov",
+            url,
+            "$vidsrcMovAPI/",
+            vidsrcMovAPI,
+            callback
+        )
+    }
+
+    suspend fun invokeVembed(
+        tmdbId: Int?,
+        imdbId: String?,
+        season: Int?,
+        callback: (ExtractorLink) -> Unit,
+    ) {
+        val id = imdbId ?: tmdbId?.toString() ?: return
+        val vembedId = if (season == null) id else "${id}_s$season"
+
+        invokeWebviewEmbedSource(
+            "Vembed",
+            "$vembedAPI/play/$vembedId",
+            "$vembedAPI/",
+            vembedAPI,
+            callback
+        )
+    }
+
     suspend fun invokeVixsrc(
         tmdbId: Int?,
         season: Int?,

@@ -21,6 +21,8 @@ import com.hexated.SoraExtractor.invokeCineSrc
 import com.hexated.SoraExtractor.invokeMafiaEmbed
 import com.hexated.SoraExtractor.invokeAutoEmbed
 import com.hexated.SoraExtractor.invoke2Embed
+import com.hexated.SoraExtractor.invokeVidsrcMov
+import com.hexated.SoraExtractor.invokeVembed
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.metaproviders.TmdbProvider
@@ -81,6 +83,8 @@ open class SoraStream : TmdbProvider() {
         const val mafiaEmbedAPI = "https://embed.streammafia.to"
         const val autoEmbedAPI = "https://autoembed.co"
         const val twoEmbedAPI = "https://www.2embedstream.xyz"
+        const val vidsrcMovAPI = "https://vidsrc.mov"
+        const val vembedAPI = "https://vembed.stream"
 
         fun getType(t: String?): TvType {
             return when (t) {
@@ -399,6 +403,12 @@ open class SoraStream : TmdbProvider() {
             },
             {
                 invoke2Embed(res.id, res.season, res.episode, callback)
+            },
+            {
+                invokeVidsrcMov(res.id, res.imdbId, res.season, res.episode, callback)
+            },
+            {
+                invokeVembed(res.id, res.imdbId, res.season, callback)
             },
             {
                 invokeMapple(res.id, res.season, res.episode, subtitleCallback, callback)
