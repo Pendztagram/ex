@@ -5,18 +5,16 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import org.jsoup.nodes.Document
+import com.fasterxml.jackson.annotation.JsonProperty
 import org.jsoup.nodes.Element
-import java.net.URI
 import java.net.URLEncoder
-import java.util.Locale
 
 class ZoronimeProvider : MainAPI() {
     override var mainUrl = "https://zoronime.online"
     override var name = "Zoronime"
     override var lang = "id"
     override val hasMainPage = true
-    override val hasDownloadSupport = false
+    override val hasDownloadSupport = true
 
     override val supportedTypes = setOf(
         TvType.Anime,
@@ -92,7 +90,7 @@ class ZoronimeProvider : MainAPI() {
             ?.groupValues
             ?.getOrNull(1)
             ?.toDoubleOrNull()
-        val year = Regex("""(19|20)\d{2}""").find(html)?.value?.toIntOrNull()
+        val year: Int? = null
 
         val episodes = document.select("a[href^=/episode/], a[href^=$mainUrl/episode/]")
             .mapNotNull { it.toEpisode() }
@@ -133,6 +131,7 @@ class ZoronimeProvider : MainAPI() {
         val html = response.text
         val emitted = linkedSetOf<String>()
         val episodeReferer = data
+        val serverApi = "https://wg-anime-api-v2-production.up.railway.app/Otakudesu/server"
 
         suspend fun emitDirect(mediaUrl: String, referer: String, label: String = name) {
             val cleanUrl = decodeEscaped(mediaUrl).substringBefore('#').trim()
@@ -157,7 +156,7 @@ class ZoronimeProvider : MainAPI() {
             )
         }
 
-        suspend fun inspectIframe(iframeUrl: String) {
+        suspend fun inspectIframe(iframeUrl: String, label: String = "$name Direct") {
             val cleanUrl = decodeEscaped(iframeUrl)
             if (cleanUrl.isBlank()) return
 
@@ -178,8 +177,39 @@ class ZoronimeProvider : MainAPI() {
                 }
                 .distinct()
                 .forEach { mediaUrl ->
-                    emitDirect(mediaUrl, cleanUrl, "$name Direct")
+                    emitDirect(mediaUrl, cleanUrl, label)
                 }
+        }
+
+        val serverLinks = extractServerLinks(html)
+        serverLinks.forEach { server ->
+            runCatching {
+                val resolved = app.get(
+                    "$serverApi/${server.serverId}",
+                    referer = episodeReferer,
+                    headers = mapOf("Accept" to "application/json")
+                ).parsedSafe<ZoronimeServerResponse>()?.data?.url
+                    ?: return@runCatching
+
+                val serverLabel = buildString {
+                    append(name)
+                    append(" [")
+                    append(server.quality.ifBlank { "Source" })
+                    append(" - ")
+                    append(server.title)
+                    append("]")
+                }
+
+                if (resolved.contains(".m3u8", true) ||
+                    resolved.contains(".mp4", true) ||
+                    resolved.contains("googlevideo", true) ||
+                    resolved.contains("blogger", true)
+                ) {
+                    emitDirect(resolved, episodeReferer, serverLabel)
+                } else {
+                    inspectIframe(resolved, serverLabel)
+                }
+            }
         }
 
         val iframeCandidates = linkedSetOf<String>()
@@ -193,7 +223,10 @@ class ZoronimeProvider : MainAPI() {
             .mapNotNull { it.groupValues.getOrNull(1) }
             .forEach(iframeCandidates::add)
 
-        iframeCandidates.forEach { inspectIframe(it) }
+        if (emitted.isEmpty()) {
+            iframeCandidates.forEach { inspectIframe(it) }
+        }
+
         return emitted.isNotEmpty()
     }
 
@@ -224,11 +257,11 @@ class ZoronimeProvider : MainAPI() {
         val label = selectFirst("span")?.text()?.trim()
             ?: text().trim()
             ?: return null
-        val number = Regex("""(\d+(?:\.\d+)?)""").find(label)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
+        val number = Regex("""(\d+)""").find(label)?.groupValues?.getOrNull(1)?.toIntOrNull()
 
         return newEpisode(href) {
             name = if (label.startsWith("Episode", true)) label else "Episode ${number ?: "?"}"
-            episode = number?.toInt()
+            episode = number
         }
     }
 
@@ -258,6 +291,28 @@ class ZoronimeProvider : MainAPI() {
             ?: 0
     }
 
+    private fun extractServerLinks(html: String): List<ZoronimeServerLink> {
+        val normalized = decodeEscaped(html)
+        val matches = Regex(
+            """"title":"\s*([^"]+?)\s*","serverList":\[(.*?)]""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        ).findAll(normalized)
+
+        return matches.flatMap { qualityMatch ->
+            val quality = qualityMatch.groupValues.getOrNull(1).orEmpty().trim()
+            val block = qualityMatch.groupValues.getOrNull(2).orEmpty()
+            Regex(
+                """"title":"([^"]+)","serverId":"([^"]+)"""",
+                RegexOption.IGNORE_CASE
+            ).findAll(block).mapNotNull { serverMatch ->
+                val title = serverMatch.groupValues.getOrNull(1)?.trim().orEmpty()
+                val serverId = serverMatch.groupValues.getOrNull(2)?.trim().orEmpty()
+                if (title.isBlank() || serverId.isBlank()) null
+                else ZoronimeServerLink(title, quality, serverId)
+            }
+        }.distinctBy { "${it.quality}:${it.title}:${it.serverId}" }.toList()
+    }
+
     private fun fixUrl(url: String): String {
         return when {
             url.startsWith("//") -> "https:$url"
@@ -265,4 +320,18 @@ class ZoronimeProvider : MainAPI() {
             else -> "$mainUrl/${url.trimStart('/')}"
         }
     }
+
+    private data class ZoronimeServerLink(
+        val title: String,
+        val quality: String,
+        val serverId: String,
+    )
+
+    private data class ZoronimeServerResponse(
+        @JsonProperty("data") val data: ZoronimeServerData? = null,
+    )
+
+    private data class ZoronimeServerData(
+        @JsonProperty("url") val url: String? = null,
+    )
 }
