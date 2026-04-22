@@ -17,20 +17,6 @@ data class VixsrcSource(
     val referer: String,
 )
 
-data class VidrockSource(
-    @JsonProperty("resolution") val resolution: Int? = null,
-    @JsonProperty("url") val url: String? = null,
-)
-
-data class VidrockSubtitle(
-    @JsonProperty("label") val label: String? = null,
-    @JsonProperty("file") val file: String? = null,
-)
-
-data class VidsrccxSource(
-    @JsonProperty("secureUrl") val secureUrl: String? = null,
-)
-
 data class WyzieSubtitle(
     @JsonProperty("display") val display: String? = null,
     @JsonProperty("url") val url: String? = null,
@@ -64,32 +50,6 @@ data class VidlinkSources(
     )
 }
 
-data class MappleSubtitle(
-    @JsonProperty("display") val display: String? = null,
-    @JsonProperty("url") val url: String? = null,
-)
-
-data class MappleSources(
-    @JsonProperty("data") val data: Data? = null,
-) {
-    data class Data(
-        @JsonProperty("stream_url") val stream_url: String? = null,
-    )
-}
-
-data class PrimeboxSources(
-    @JsonProperty("streams") val streams: HashMap<String, String>? = null,
-    @JsonProperty("subtitles") val subtitles: ArrayList<Subtitles>? = null,
-) {
-    data class Subtitles(
-        @JsonProperty("file") val file: String? = null,
-        @JsonProperty("label") val label: String? = null,
-    )
-}
-
-data class RageSources(
-    @JsonProperty("url") val url: String? = null,
-)
 
 data class VidsrcccServer(
     @JsonProperty("name") val name: String? = null,
@@ -132,13 +92,6 @@ data class AniPage(@JsonProperty("media") var media: java.util.ArrayList<AniMedi
 data class AniData(@JsonProperty("Page") var Page: AniPage? = AniPage())
 
 data class AniSearch(@JsonProperty("data") var data: AniData? = AniData())
-
-data class GpressSources(
-    @JsonProperty("src") val src: String,
-    @JsonProperty("file") val file: String? = null,
-    @JsonProperty("label") val label: Int? = null,
-    @JsonProperty("max") val max: String,
-)
 
 data class ResponseHash(
     @JsonProperty("embed_url") val embed_url: String,
