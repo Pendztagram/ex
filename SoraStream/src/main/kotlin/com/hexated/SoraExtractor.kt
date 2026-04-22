@@ -770,6 +770,8 @@ object SoraExtractor : SoraStream() {
             app.post(playUrl, requestBody = "captcha_id=TEduRVR6NmZ3Sk5Jc3JpZEJCSlhTM25GREs2RCswK0VQN2ZsclI5KzNKL2cyV3dIaFEwZzNRRHVwMzdqVmoxV0t2QlBrNjNTY04wY2NSaHlWYS9Jc09nb25wZTV2YmxDSXNRZVNuQUpuRW5nbkF2dURsQUdJWVpwOWxUZzU5Tnh0NXllQjdYUG83Y0ZVaG1XRGtPOTBudnZvN0RFK0wxdGZvYXpFKzVNM2U1a2lBMG40REJmQ042SA%3D%3D&captcha_answer%5B%5D=8yhbjraxqf3o&captcha_answer%5B%5D=10zxn5vi746w&captcha_answer%5B%5D=gxfpe17tdwub".toRequestBody(RequestBodyTypes.TEXT.toMediaTypeOrNull())
             ).document.selectFirst("iframe.source-frame")?.attr("src")
         }
+        val iframeReferer = iframe ?: playUrl
+        val iframeOrigin = getBaseUrl(iframeReferer)
         val json = app.get(iframe ?: return).text.substringAfter("Playerjs(").substringBefore(");")
 
         val video = """file:"([^"]+)""".toRegex().find(json)?.groupValues?.get(1)
@@ -781,8 +783,12 @@ object SoraExtractor : SoraStream() {
                 video ?: return,
                 INFER_TYPE
             ) {
+                this.referer = iframeReferer
                 this.headers = mapOf(
-                    "Accept" to "*/*"
+                    "Accept" to "*/*",
+                    "Referer" to iframeReferer,
+                    "Origin" to iframeOrigin,
+                    "User-Agent" to USER_AGENT,
                 )
             }
         )
@@ -1009,7 +1015,7 @@ object SoraExtractor : SoraStream() {
             }.getOrDefault("")
 
             val type = getRiveStreamType(finalUrl, format, contentType, sample) ?: return null
-            return url to type
+            return finalUrl to type
         }
 
         val sourceApiUrl =
@@ -1084,15 +1090,16 @@ object SoraExtractor : SoraStream() {
                                     val origin = headersMap["Origin"] ?: ""
                                     val videoHeaders = buildMap {
                                         put("User-Agent", USER_AGENT)
-                                        if (referer.isNotBlank()) put("Referer", referer)
-                                        if (origin.isNotBlank()) put("Origin", origin)
+                                        put("Accept", "*/*")
+                                        put("Referer", referer.ifBlank { "$RiveStreamAPI/" })
+                                        put("Origin", origin.ifBlank { RiveStreamAPI })
                                     }
 
                                     val type = getRiveStreamType(decodedUrl, format) ?: continue
 
                                     callback.invoke(newExtractorLink(label, label, decodedUrl, type) {
                                         this.quality = quality
-                                        this.referer = referer
+                                        this.referer = referer.ifBlank { "$RiveStreamAPI/" }
                                         this.headers = videoHeaders
                                     })
                                 } catch (e: Exception) {
@@ -1110,9 +1117,14 @@ object SoraExtractor : SoraStream() {
                                         directUrl,
                                         type
                                     ) {
-                                        this.referer = ""
+                                        this.referer = "$RiveStreamAPI/"
                                         this.quality = quality
-                                        this.headers = mapOf("User-Agent" to USER_AGENT)
+                                        this.headers = mapOf(
+                                            "Accept" to "*/*",
+                                            "User-Agent" to USER_AGENT,
+                                            "Referer" to "$RiveStreamAPI/",
+                                            "Origin" to RiveStreamAPI,
+                                        )
                                     })
                             }
                         } catch (e: Exception) {
