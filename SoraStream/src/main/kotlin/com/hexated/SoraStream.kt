@@ -16,6 +16,8 @@ import com.hexated.SoraExtractor.invokeAutoEmbed
 import com.hexated.SoraExtractor.invoke2Embed
 import com.hexated.SoraExtractor.invokeVidsrcMov
 import com.hexated.SoraExtractor.invokeVembed
+import com.hexated.SoraExtractor.invokeAzmovies
+import com.hexated.SoraExtractor.invokeNoxx
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.metaproviders.TmdbProvider
@@ -58,6 +60,8 @@ open class SoraStream : TmdbProvider() {
 
         /** ALL SOURCES */
         const val idlixAPI = "https://z1.idlixku.com"
+        const val azmoviesAPI = "https://azmovies.to"
+        const val noxxAPI = "https://noxx.to"
         const val vidsrcccAPI = "https://vidsrc.cc"
         const val vidSrcAPI = "https://vidsrc.net"
         const val watchSomuchAPI = "https://watchsomuch.tv"
@@ -331,6 +335,7 @@ open class SoraStream : TmdbProvider() {
             },
             {
                 invokeVidsrc(
+                    res.id,
                     res.imdbId,
                     res.season,
                     res.episode,
@@ -385,6 +390,27 @@ open class SoraStream : TmdbProvider() {
                     subtitleCallback,
                     callback
                 )
+            },
+            {
+                if (res.season == null) {
+                    invokeAzmovies(
+                        res.title,
+                        res.year,
+                        subtitleCallback,
+                        callback
+                    )
+                }
+            },
+            {
+                if (res.season != null) {
+                    invokeNoxx(
+                        res.title,
+                        res.season,
+                        res.episode,
+                        subtitleCallback,
+                        callback
+                    )
+                }
             },
             {
                 invokeKisskh(

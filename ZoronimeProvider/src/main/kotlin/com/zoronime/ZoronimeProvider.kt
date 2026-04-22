@@ -1,6 +1,8 @@
 package com.zoronime
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.INFER_TYPE
+import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.loadExtractor
@@ -156,6 +158,44 @@ class ZoronimeProvider : MainAPI() {
             )
         }
 
+        suspend fun emitBloggerLinks(bloggerUrl: String, referer: String, label: String): Boolean {
+            val resolvedVideos = extractBloggerDirectVideos(bloggerUrl, referer)
+            if (resolvedVideos.isEmpty()) return false
+
+            resolvedVideos.forEach { video ->
+                val directReferer = if (video.url.contains("googlevideo.com/", true)) {
+                    "https://youtube.googleapis.com/"
+                } else {
+                    bloggerUrl
+                }
+                val cleanUrl = decodeEscaped(video.url).substringBefore('#').trim()
+                if (cleanUrl.isBlank() || !emitted.add(cleanUrl)) return@forEach
+
+                callback(
+                    newExtractorLink(
+                        source = name,
+                        name = label,
+                        url = cleanUrl,
+                        type = INFER_TYPE
+                    ) {
+                        this.referer = directReferer
+                        this.quality = if (video.quality != Qualities.Unknown.value) {
+                            video.quality
+                        } else {
+                            qualityFromName(label)
+                        }
+                        headers = mapOf(
+                            "Referer" to directReferer,
+                            "User-Agent" to USER_AGENT,
+                            "Accept" to "*/*"
+                        )
+                    }
+                )
+            }
+
+            return true
+        }
+
         suspend fun inspectIframe(iframeUrl: String, label: String = "$name Direct") {
             val cleanUrl = decodeEscaped(iframeUrl)
             if (cleanUrl.isBlank()) return
@@ -177,7 +217,13 @@ class ZoronimeProvider : MainAPI() {
                     ).parsedSafe<ZoronimePlayerRefresh>()?.video
 
                     if (!refreshed.isNullOrBlank()) {
-                        emitDirect(refreshed, cleanUrl, label)
+                        if (refreshed.contains("blogger.com/video.g", true) ||
+                            refreshed.contains("blogger.googleusercontent.com", true)
+                        ) {
+                            emitBloggerLinks(refreshed, cleanUrl, label)
+                        } else {
+                            emitDirect(refreshed, cleanUrl, label)
+                        }
                     }
                 }
             }
@@ -199,7 +245,13 @@ class ZoronimeProvider : MainAPI() {
                 }
                 .distinct()
                 .forEach { mediaUrl ->
-                    emitDirect(mediaUrl, cleanUrl, label)
+                    if (mediaUrl.contains("blogger.com/video.g", true) ||
+                        mediaUrl.contains("blogger.googleusercontent.com", true)
+                    ) {
+                        emitBloggerLinks(mediaUrl, cleanUrl, label)
+                    } else {
+                        emitDirect(mediaUrl, cleanUrl, label)
+                    }
                 }
         }
 
@@ -227,7 +279,13 @@ class ZoronimeProvider : MainAPI() {
                     resolved.contains("googlevideo", true) ||
                     resolved.contains("blogger", true)
                 ) {
-                    emitDirect(resolved, episodeReferer, serverLabel)
+                    if (resolved.contains("blogger.com/video.g", true) ||
+                        resolved.contains("blogger.googleusercontent.com", true)
+                    ) {
+                        emitBloggerLinks(resolved, episodeReferer, serverLabel)
+                    } else {
+                        emitDirect(resolved, episodeReferer, serverLabel)
+                    }
                 } else {
                     inspectIframe(resolved, serverLabel)
                 }
@@ -300,11 +358,142 @@ class ZoronimeProvider : MainAPI() {
         var result = value.trim()
         repeat(3) {
             result = result
+                .replace("\\u003d", "=")
+                .replace("\\u0026", "&")
                 .replace("\\u002F", "/")
                 .replace("\\/", "/")
                 .replace("&amp;", "&")
         }
         return result
+    }
+
+    private fun decodeUnicodeEscapes(input: String): String {
+        val unicodeRegex = Regex("""\\u([0-9a-fA-F]{4})""")
+        var output = input
+        repeat(2) {
+            output = unicodeRegex.replace(output) { match ->
+                match.groupValues[1].toInt(16).toChar().toString()
+            }
+        }
+        output = output.replace("\\/", "/")
+        output = output.replace("\\=", "=")
+        output = output.replace("\\&", "&")
+        output = output.replace("\\\\", "\\")
+        output = output.replace("\\\"", "\"")
+        return output
+    }
+
+    private fun normalizeVideoUrl(input: String): String {
+        return decodeUnicodeEscapes(input)
+            .replace("\\u003d", "=")
+            .replace("\\u0026", "&")
+            .replace("\\u002F", "/")
+            .replace("\\/", "/")
+            .replace("\\", "")
+    }
+
+    private suspend fun extractBloggerDirectVideos(url: String, referer: String?): List<ResolvedVideo> {
+        val fixedUrl = if (url.startsWith("//")) "https:$url" else decodeEscaped(url)
+
+        if (fixedUrl.contains("blogger.googleusercontent.com", true)) {
+            return listOf(
+                ResolvedVideo(
+                    url = fixedUrl,
+                    quality = itagToQuality(
+                        Regex("[?&]itag=(\\d+)")
+                            .find(fixedUrl)
+                            ?.groupValues
+                            ?.getOrNull(1)
+                            ?.toIntOrNull()
+                    )
+                )
+            )
+        }
+
+        val token = Regex("[?&]token=([^&]+)")
+            .find(fixedUrl)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?: return emptyList()
+
+        val page = runCatching {
+            app.get(
+                fixedUrl,
+                referer = referer ?: "$mainUrl/",
+                headers = mapOf(
+                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "User-Agent" to USER_AGENT
+                )
+            )
+        }.getOrNull() ?: return emptyList()
+        val html = page.text
+        val cookies = page.cookies
+
+        val fSid = Regex("FdrFJe\":\"(-?\\d+)\"")
+            .find(html)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?: ""
+        val bl = Regex("cfb2h\":\"([^\"]+)\"")
+            .find(html)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?: return emptyList()
+        val hl = Regex("lang=\"([^\"]+)\"")
+            .find(html)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.ifBlank { null }
+            ?: "en-US"
+        val reqId = (10000..99999).random()
+        val rpcId = "WcwnYd"
+        val payload = """[[["$rpcId","[\"$token\",\"\",0]",null,"generic"]]]"""
+        val apiUrl = "https://www.blogger.com/_/BloggerVideoPlayerUi/data/batchexecute" +
+            "?rpcids=$rpcId&source-path=%2Fvideo.g&f.sid=$fSid&bl=$bl&hl=$hl&_reqid=$reqId&rt=c"
+
+        val response = runCatching {
+            app.post(
+                apiUrl,
+                data = mapOf("f.req" to payload),
+                referer = fixedUrl,
+                cookies = cookies,
+                headers = mapOf(
+                    "Origin" to "https://www.blogger.com",
+                    "Accept" to "*/*",
+                    "Content-Type" to "application/x-www-form-urlencoded;charset=UTF-8",
+                    "X-Same-Domain" to "1",
+                    "User-Agent" to USER_AGENT
+                )
+            ).text
+        }.getOrNull() ?: return emptyList()
+
+        return Regex("""https://[^\s"']+""")
+            .findAll(decodeUnicodeEscapes(response))
+            .map { it.value }
+            .plus(
+                Regex("""https://[^\s"']+""")
+                    .findAll(response)
+                    .map { it.value }
+            )
+            .map { normalizeVideoUrl(it) }
+            .filter {
+                it.contains("googlevideo.com/videoplayback", true) ||
+                    it.contains("blogger.googleusercontent.com", true)
+            }
+            .distinct()
+            .map { videoUrl ->
+                ResolvedVideo(
+                    url = videoUrl,
+                    quality = itagToQuality(
+                        Regex("[?&]itag=(\\d+)")
+                            .find(videoUrl)
+                            ?.groupValues
+                            ?.getOrNull(1)
+                            ?.toIntOrNull()
+                    )
+                )
+            }
+            .toList()
     }
 
     private fun qualityFromName(value: String): Int {
@@ -338,6 +527,25 @@ class ZoronimeProvider : MainAPI() {
         }.distinctBy { "${it.quality}:${it.title}:${it.serverId}" }.toList()
     }
 
+    private fun itagToQuality(itag: Int?): Int {
+        return when (itag) {
+            18 -> Qualities.P360.value
+            22 -> Qualities.P720.value
+            37 -> Qualities.P1080.value
+            59 -> Qualities.P480.value
+            43 -> Qualities.P360.value
+            36 -> Qualities.P240.value
+            17 -> Qualities.P144.value
+            137 -> Qualities.P1080.value
+            136 -> Qualities.P720.value
+            135 -> Qualities.P480.value
+            134 -> Qualities.P360.value
+            133 -> Qualities.P240.value
+            160 -> Qualities.P144.value
+            else -> Qualities.Unknown.value
+        }
+    }
+
     private fun fixUrl(url: String): String {
         return when {
             url.startsWith("//") -> "https:$url"
@@ -362,5 +570,10 @@ class ZoronimeProvider : MainAPI() {
 
     private data class ZoronimePlayerRefresh(
         @JsonProperty("video") val video: String? = null,
+    )
+
+    private data class ResolvedVideo(
+        val url: String,
+        val quality: Int,
     )
 }

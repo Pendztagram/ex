@@ -5,11 +5,19 @@ import com.lagradost.cloudstream3.extractors.helper.AesHelper
 import com.lagradost.cloudstream3.mvvm.logError
 import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.nicehttp.NiceResponse
+import com.lagradost.nicehttp.RequestBodyTypes
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import org.json.JSONObject
 import com.fasterxml.jackson.annotation.JsonProperty
 import okhttp3.Interceptor
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
+import java.net.URLDecoder
+import java.net.URLEncoder
 
 object SoraExtractor : SoraStream() {
 
@@ -206,6 +214,7 @@ object SoraExtractor : SoraStream() {
     }
 
     suspend fun invokeVidsrc(
+        tmdbId: Int?,
         imdbId: String?,
         season: Int?,
         episode: Int?,
@@ -213,13 +222,38 @@ object SoraExtractor : SoraStream() {
         callback: (ExtractorLink) -> Unit,
     ) {
         val api = "https://cloudnestra.com"
-        val url = if (season == null) {
+        val imdbUrl = if (season == null) {
             "$vidSrcAPI/embed/movie?imdb=$imdbId"
         } else {
             "$vidSrcAPI/embed/tv?imdb=$imdbId&season=$season&episode=$episode"
         }
+        val legacyUrl = tmdbId?.let {
+            if (season == null) {
+                "$vidSrcAPI/embed/$it"
+            } else {
+                "$vidSrcAPI/embed/$it/${season}-${episode}"
+            }
+        }
+        val vsembedUrl = tmdbId?.let {
+            if (season == null) {
+                "https://vsembed.ru/embed/$it"
+            } else {
+                "https://vsembed.ru/embed/$it/${season}-${episode}"
+            }
+        }
 
-        val document = app.get(url).document
+        var emitted = false
+        listOfNotNull(imdbUrl, legacyUrl, vsembedUrl).distinct().forEach { embedUrl ->
+            loadExtractor(embedUrl, null, subtitleCallback) { link ->
+                emitted = true
+                callback.invoke(link)
+            }
+        }
+
+        if (emitted) return
+        if (listOfNotNull(imdbUrl, legacyUrl, vsembedUrl).any { loadVidsrcXpass(it, false, null, callback) }) return
+
+        val document = app.get(imdbUrl).document
         val playerIframe = document.selectFirst("iframe#player_iframe")?.attr("src")
             ?.let { iframe ->
                 if (iframe.startsWith("//")) "https:$iframe" else iframe
@@ -234,7 +268,7 @@ object SoraExtractor : SoraStream() {
                 ?.let { "$api/rcp/$it" }
         } ?: return
 
-        val hash = app.get(rcpPath, referer = url).text
+        val hash = app.get(rcpPath, referer = imdbUrl).text
             .substringAfter("/prorcp/")
             .substringBefore("'")
             .ifBlank { return }
@@ -253,6 +287,103 @@ object SoraExtractor : SoraStream() {
             }
         )
 
+    }
+
+    suspend fun invokeAzmovies(
+        title: String?,
+        year: Int?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+    ) {
+        val query = title?.trim()?.takeIf { it.isNotBlank() } ?: return
+        val searchUrl =
+            "$azmoviesAPI/search?q=${query.urlEncodeCompat()}&year_from=0&year_to=0&rating_from=0&rating_to=10&sort=featured"
+        val searchDocument = requestAzMoviesPage(searchUrl).document
+        val targetUrl = searchDocument.select("#movies-container a.poster")
+            .mapNotNull { element ->
+                val href = element.attr("href").let { fixUrl(it, azmoviesAPI) }
+                val candidateTitle = element.selectFirst("span.poster__title")?.text()?.trim()
+                val candidateYear = element.selectFirst("span.badge")?.text()?.trim()?.toIntOrNull()
+                Triple(href, candidateTitle, candidateYear)
+            }.firstOrNull { (_, candidateTitle, candidateYear) ->
+                titleMatches(candidateTitle, query) && (year == null || candidateYear == null || candidateYear == year)
+            }?.first
+            ?: return
+
+        val response = requestAzMoviesPage(targetUrl)
+        val seenSubtitles = linkedSetOf<String>()
+        extractAzMoviesServerButtons(response.text, response.document).forEach { button ->
+            val rawUrl = button.url.replace("&amp;", "&").trim()
+            if (rawUrl.isBlank()) return@forEach
+
+            extractInlineSubtitle(rawUrl)?.let { subtitle ->
+                if (seenSubtitles.add(subtitle.url)) subtitleCallback(subtitle)
+            }
+
+            runCatching {
+                if (!loadVidsrcXpass(rawUrl, false, "$azmoviesAPI/", callback)) {
+                    loadExtractor(rawUrl, "$azmoviesAPI/", subtitleCallback, callback)
+                }
+            }.onFailure {
+                loadExtractor(rawUrl, "$azmoviesAPI/", subtitleCallback, callback)
+            }
+        }
+    }
+
+    suspend fun invokeNoxx(
+        title: String?,
+        season: Int?,
+        episode: Int?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+    ) {
+        val query = title?.trim()?.takeIf { it.isNotBlank() } ?: return
+        val targetSeason = season ?: return
+        val targetEpisode = episode ?: return
+        val searchUrl = "$noxxAPI/browse?q=${query.urlEncodeCompat()}"
+        val searchDocument = requestNoxxPage(searchUrl).document
+        val showUrl = searchDocument.select("a.poster-card")
+            .mapNotNull { card ->
+                val href = card.attr("href").let { fixUrl(it, noxxAPI) }
+                val candidateTitle = card.selectFirst("img")?.attr("alt")?.trim()
+                    ?: card.selectFirst("span")?.text()?.trim()
+                href to candidateTitle
+            }.firstOrNull { (_, candidateTitle) ->
+                titleMatches(candidateTitle, query)
+            }?.first
+            ?: return
+
+        val showDocument = requestNoxxPage(showUrl).document
+        val episodeUrl = showDocument.select("a.episode-card")
+            .mapNotNull { card ->
+                val href = card.attr("href").let { fixUrl(it, noxxAPI) }
+                val match = Regex("""/tv/[^/]+/(\d+)/(\d+)""").find(href) ?: return@mapNotNull null
+                val cardSeason = match.groupValues[1].toIntOrNull() ?: return@mapNotNull null
+                val cardEpisode = match.groupValues[2].toIntOrNull() ?: return@mapNotNull null
+                Triple(href, cardSeason, cardEpisode)
+            }.firstOrNull { (_, cardSeason, cardEpisode) ->
+                cardSeason == targetSeason && cardEpisode == targetEpisode
+            }?.first
+            ?: return
+
+        val episodeResponse = requestNoxxPage(episodeUrl)
+        val seenSubtitles = linkedSetOf<String>()
+        episodeResponse.document.select("#serverselector button[value], button.sch[value]").forEach { button ->
+            val rawUrl = button.attr("value").replace("&amp;", "&").trim()
+            if (rawUrl.isBlank()) return@forEach
+
+            extractInlineSubtitle(rawUrl)?.let { subtitle ->
+                if (seenSubtitles.add(subtitle.url)) subtitleCallback(subtitle)
+            }
+
+            runCatching {
+                if (!loadVidsrcXpass(rawUrl, true, "$noxxAPI/", callback)) {
+                    loadExtractor(rawUrl, "$noxxAPI/", subtitleCallback, callback)
+                }
+            }.onFailure {
+                loadExtractor(rawUrl, "$noxxAPI/", subtitleCallback, callback)
+            }
+        }
     }
 
     suspend fun invokeWatchsomuch(
@@ -707,6 +838,188 @@ object SoraExtractor : SoraStream() {
     private data class KisskhSubtitle(
         @param:JsonProperty("src") val src: String?,
         @param:JsonProperty("label") val label: String?
+    )
+
+    private suspend fun loadVidsrcXpass(
+        url: String,
+        isTv: Boolean,
+        referer: String?,
+        callback: (ExtractorLink) -> Unit,
+    ): Boolean {
+        if (!url.contains("vidsrc", true) && !url.contains("vsembed", true)) return false
+
+        val embedUrl = if (url.contains("autoplay=", true)) url else {
+            val joiner = if (url.contains("?")) "&" else "?"
+            "$url${joiner}autoplay=1"
+        }
+        val browserHeaders = mapOf(
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "User-Agent" to USER_AGENT,
+        )
+        val embedResponse = app.get(embedUrl, referer = referer, headers = browserHeaders)
+        val twoEmbedHash = Regex(
+            """<div\s+class=["']server["'][^>]*data-hash=["']([^"']+)["'][^>]*>\s*2Embed\s*</div>""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        ).find(embedResponse.text)?.groupValues?.getOrNull(1) ?: return false
+        val rcpUrl = fixUrl("//cloudnestra.com/rcp/$twoEmbedHash", getBaseUrl(embedResponse.url))
+        val rcpResponse = app.get(rcpUrl, referer = "${getBaseUrl(embedResponse.url)}/", headers = browserHeaders)
+        val srcrcpUrl = Regex("""/srcrcp/[^'"\s<]+""")
+            .find(rcpResponse.text)
+            ?.value
+            ?.let { fixUrl(it, getBaseUrl(rcpResponse.url)) }
+            ?: return false
+        val twoEmbedResponse = app.get(srcrcpUrl, referer = "${getBaseUrl(rcpResponse.url)}/", headers = browserHeaders)
+        val xpsUrl = Regex("""https://streamsrcs\.2embed\.cc/xps(?:-tv)?\?[^'"\s<]+""", RegexOption.IGNORE_CASE)
+            .find(twoEmbedResponse.text)
+            ?.value
+            ?: return false
+        val xpsResponse = app.get(xpsUrl, referer = "${getBaseUrl(twoEmbedResponse.url)}/", headers = browserHeaders)
+        val xpassSlug = xpsResponse.document.selectFirst("iframe#framesrc")?.attr("src")?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: return false
+        val xpassBase = if (isTv || xpsUrl.contains("xps-tv", true)) {
+            "https://play.xpass.top/e/tv/"
+        } else {
+            "https://play.xpass.top/e/movie/"
+        }
+        val xpassUrl = "$xpassBase${xpassSlug.removePrefix("/")}"
+        val xpassResponse = app.get(xpassUrl, referer = "${getBaseUrl(xpsResponse.url)}/", headers = browserHeaders)
+        val playlistUrl = Regex(""""playlist":"([^"]+/playlist\.json)"""")
+            .find(xpassResponse.text)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.replace("\\/", "/")
+            ?.let { fixUrl(it, getBaseUrl(xpassResponse.url)) }
+            ?: return false
+        val playlistResponse = app.get(
+            playlistUrl,
+            referer = xpassUrl,
+            headers = mapOf("Accept" to "application/json,text/plain,*/*", "User-Agent" to USER_AGENT),
+        )
+        val streamUrl = Regex(""""file"\s*:\s*"([^"]+)"""")
+            .findAll(playlistResponse.text)
+            .mapNotNull { it.groupValues.getOrNull(1) }
+            .map { it.replace("\\u0026", "&").replace("\\/", "/") }
+            .firstOrNull { it.contains(".m3u8", true) }
+            ?: return false
+        val generatedLinks = M3u8Helper.generateM3u8(
+            "VidSrc",
+            streamUrl,
+            "https://play.xpass.top/",
+            headers = mapOf(
+                "Accept" to "*/*",
+                "Referer" to "https://play.xpass.top/",
+                "Origin" to "https://play.xpass.top",
+                "User-Agent" to USER_AGENT,
+            ),
+        )
+        if (generatedLinks.isEmpty()) return false
+        generatedLinks.forEach(callback)
+        return true
+    }
+
+    private suspend fun requestAzMoviesPage(url: String): NiceResponse {
+        val headers = mapOf(
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "User-Agent" to USER_AGENT,
+        )
+        val response = app.get(url, headers = headers, timeout = 30L)
+        if (!response.text.contains("Verifying your browser", true) || !response.text.contains("var verifyToken")) {
+            return response
+        }
+        val token = response.text.substringAfter("var verifyToken = \"", "").substringBefore("\"")
+        if (token.isBlank()) return response
+        val cookies = response.cookies
+        app.post(
+            "$azmoviesAPI/verified",
+            headers = headers + mapOf(
+                "Content-Type" to "application/json",
+                "Origin" to azmoviesAPI,
+                "Referer" to url,
+                "X-Requested-With" to "XMLHttpRequest",
+            ),
+            cookies = cookies,
+            requestBody = """{"token":"$token"}""".toRequestBody(RequestBodyTypes.JSON.toMediaTypeOrNull()),
+        )
+        return app.get(url, headers = headers, cookies = cookies, timeout = 30L)
+    }
+
+    private suspend fun requestNoxxPage(url: String): NiceResponse {
+        val headers = mapOf(
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "User-Agent" to USER_AGENT,
+        )
+        val response = app.get(url, headers = headers, timeout = 30L)
+        if (!response.text.contains("Verifying your browser", true) || !response.text.contains("var token =")) {
+            return response
+        }
+        val token = Regex("""var token = "([^"]+)"""").find(response.text)?.groupValues?.getOrNull(1)
+            ?: return response
+        val cookies = response.cookies
+        val verifiedResponse = app.post(
+            "$noxxAPI/verified",
+            data = mapOf("token" to token),
+            cookies = cookies,
+            headers = mapOf(
+                "Origin" to noxxAPI,
+                "Referer" to url,
+                "User-Agent" to USER_AGENT,
+                "Accept" to "application/json,text/plain,*/*",
+                "X-Requested-With" to "XMLHttpRequest",
+            ),
+        )
+        val verifiedCookies = if (verifiedResponse.cookies.isNotEmpty()) verifiedResponse.cookies else cookies
+        return app.get(url, headers = headers, cookies = verifiedCookies, timeout = 30L)
+    }
+
+    private fun extractAzMoviesServerButtons(html: String, document: Document): List<SiteSourceButton> {
+        val regexButtons = Regex(
+            """<button[^>]*class=["'][^"']*server-btn[^"']*["'][^>]*data-url=["']([^"']+)["'][^>]*data-server=["']([^"']*)["'][^>]*data-quality=["']([^"']*)["'][^>]*>""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        ).findAll(html).map {
+            SiteSourceButton(
+                url = it.groupValues[1],
+                server = it.groupValues[2],
+                quality = it.groupValues[3],
+            )
+        }.toList()
+        val domButtons = document.select("button.server-btn[data-url]").map {
+            SiteSourceButton(
+                url = it.attr("data-url"),
+                server = it.attr("data-server"),
+                quality = it.attr("data-quality"),
+            )
+        }
+        return (regexButtons + domButtons).distinctBy { "${it.server}|${it.url}" }
+    }
+
+    private suspend fun extractInlineSubtitle(url: String): SubtitleFile? {
+        val subtitleUrl = url.substringAfter("c1_file=", "").substringBefore("&").let {
+            URLDecoder.decode(it, "UTF-8")
+        }
+        if (subtitleUrl.isBlank() || !subtitleUrl.contains(".vtt", true)) return null
+        val label = URLDecoder.decode(url.substringAfter("c1_label=", "English").substringBefore("&"), "UTF-8")
+        return newSubtitleFile(label.ifBlank { "English" }, subtitleUrl)
+    }
+
+    private fun titleMatches(candidate: String?, target: String): Boolean {
+        val normalizedCandidate = candidate.normalizeSearchTitle()
+        val normalizedTarget = target.normalizeSearchTitle()
+        return normalizedCandidate == normalizedTarget ||
+            normalizedCandidate.contains(normalizedTarget) ||
+            normalizedTarget.contains(normalizedCandidate)
+    }
+
+    private fun String?.normalizeSearchTitle(): String {
+        return this.orEmpty().lowercase().replace(Regex("[^a-z0-9]+"), " ").trim()
+    }
+
+    private fun String.urlEncodeCompat(): String = URLEncoder.encode(this, "UTF-8")
+
+    private data class SiteSourceButton(
+        val url: String,
+        val server: String,
+        val quality: String,
     )
 
 
