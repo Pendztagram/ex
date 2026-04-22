@@ -1,5 +1,6 @@
 package com.hexated
 
+import android.content.SharedPreferences
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.hexated.SoraExtractor.invokeKisskh
 import com.hexated.SoraExtractor.invokeIdlix
@@ -15,9 +16,14 @@ import com.hexated.SoraExtractor.invokeMafiaEmbed
 import com.hexated.SoraExtractor.invokeAutoEmbed
 import com.hexated.SoraExtractor.invoke2Embed
 import com.hexated.SoraExtractor.invokeVidsrcMov
+import com.hexated.SoraExtractor.invokeMultiEmbed
+import com.hexated.SoraExtractor.invokeNinetv
+import com.hexated.SoraExtractor.invokeRidomovies
+import com.hexated.SoraExtractor.invokeSoapy
 import com.hexated.SoraExtractor.invokeVembed
 import com.hexated.SoraExtractor.invokeAzmovies
 import com.hexated.SoraExtractor.invokeNoxx
+import com.hexated.SoraExtractor.invokeWatch32
 import com.hexated.SoraExtractor.invokeSmashyStream
 import com.hexated.SoraExtractor.invokeRiveStream
 import com.lagradost.cloudstream3.*
@@ -29,14 +35,22 @@ import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlin.math.roundToInt
 
 
-open class SoraStream : TmdbProvider() {
+open class SoraStream(val sharedPref: SharedPreferences? = null) : TmdbProvider() {
     override var name = "SoraStream"
     override val hasMainPage = true
     override val instantLinkLoading = true
     override val useMetaLoadResponse = true
+    override val hasChromecastSupport = true
     override val hasQuickSearch = true
     override val supportedTypes = setOf(
         TvType.Movie,
@@ -44,6 +58,8 @@ open class SoraStream : TmdbProvider() {
         TvType.Anime,
     )
 
+    val token: String? = sharedPref?.getString("token", null)
+    val langCode = sharedPref?.getString("tmdb_language_code", "en-US")
 
     val wpRedisInterceptor by lazy { CloudflareKiller() }
 
@@ -51,14 +67,18 @@ open class SoraStream : TmdbProvider() {
     companion object {
         /** TOOLS */
         var context: android.content.Context? = null
-        
-        private const val tmdbAPI = "https://api.themoviedb.org/3"
+
+        private const val OFFICIAL_TMDB_URL = "https://api.themoviedb.org/3"
+        private var currentBaseUrl: String? = null
+        private val apiMutex = Mutex()
+
         const val gdbot = "https://gdtot.pro"
         const val anilistAPI = "https://graphql.anilist.co"
         const val malsyncAPI = "https://api.malsync.moe"
         const val jikanAPI = "https://api.jikan.moe/v4"
 
         private const val apiKey = "b030404650f279792a8d3287232358e3"
+        private const val sourceConcurrency = 6
 
         /** ALL SOURCES */
         const val idlixAPI = "https://z1.idlixku.com"
@@ -76,9 +96,83 @@ open class SoraStream : TmdbProvider() {
         const val autoEmbedAPI = "https://autoembed.co"
         const val twoEmbedAPI = "https://www.2embedstream.xyz"
         const val vidsrcMovAPI = "https://vidsrc.mov"
+        const val multiEmbedAPI = "https://multiembed.mov"
+        const val nineTvAPI = "https://moviesapi.club"
+        const val ridomoviesAPI = "https://ridomovies.tv"
+        const val soapyAPI = "https://soapy.to"
+        const val watch32API = "https://watch32.sx"
         const val vembedAPI = "https://vembed.stream"
         const val smashyStreamAPI = "https://embed.smashystream.com"
         const val riveStreamAPI = "https://rivestream.org"
+
+        enum class SourceGroup {
+            CORE,
+            EMBED,
+            SUBTITLE,
+            FALLBACK,
+        }
+
+        data class SourceDescriptor(
+            val key: String,
+            val group: SourceGroup,
+            val priority: Int,
+            val movie: Boolean = true,
+            val tv: Boolean = true,
+            val subtitleOnly: Boolean = false,
+        )
+
+        val sourceRegistry = listOf(
+            SourceDescriptor("vidsrccc", SourceGroup.CORE, 10),
+            SourceDescriptor("vidsrc", SourceGroup.CORE, 20),
+            SourceDescriptor("vidlink", SourceGroup.CORE, 30),
+            SourceDescriptor("vidfast", SourceGroup.CORE, 40),
+            SourceDescriptor("vixsrc", SourceGroup.EMBED, 50),
+            SourceDescriptor("cinesrc", SourceGroup.EMBED, 60),
+            SourceDescriptor("mafiaembed", SourceGroup.EMBED, 70),
+            SourceDescriptor("autoembed", SourceGroup.EMBED, 80),
+            SourceDescriptor("2embed", SourceGroup.EMBED, 90),
+            SourceDescriptor("vidsrcmov", SourceGroup.EMBED, 100),
+            SourceDescriptor("multiembed", SourceGroup.EMBED, 110),
+            SourceDescriptor("ninetv", SourceGroup.EMBED, 120),
+            SourceDescriptor("ridomovies", SourceGroup.EMBED, 130),
+            SourceDescriptor("soapy", SourceGroup.EMBED, 140),
+            SourceDescriptor("rivestream", SourceGroup.EMBED, 150),
+            SourceDescriptor("smashystream", SourceGroup.EMBED, 160),
+            SourceDescriptor("vembed", SourceGroup.EMBED, 170, tv = false),
+            SourceDescriptor("wyzie", SourceGroup.SUBTITLE, 180, subtitleOnly = true),
+            SourceDescriptor("watchsomuch", SourceGroup.SUBTITLE, 190, subtitleOnly = true),
+            SourceDescriptor("idlix", SourceGroup.FALLBACK, 200),
+            SourceDescriptor("azmovies", SourceGroup.FALLBACK, 210, tv = false),
+            SourceDescriptor("noxx", SourceGroup.FALLBACK, 220, movie = false),
+            SourceDescriptor("watch32", SourceGroup.FALLBACK, 230),
+            SourceDescriptor("kisskh", SourceGroup.FALLBACK, 240),
+        ).sortedBy { it.priority }
+
+        suspend fun getApiBase(): String {
+            currentBaseUrl?.let { return it }
+
+            return apiMutex.withLock {
+                currentBaseUrl?.let { return it }
+                currentBaseUrl = if (checkConnectivity(OFFICIAL_TMDB_URL)) {
+                    OFFICIAL_TMDB_URL
+                } else {
+                    OFFICIAL_TMDB_URL
+                }
+                currentBaseUrl ?: OFFICIAL_TMDB_URL
+            }
+        }
+
+        private suspend fun checkConnectivity(url: String): Boolean {
+            return try {
+                val response = app.get(
+                    "$url/configuration?api_key=$apiKey",
+                    timeout = 10
+                )
+                response.code == 200 || response.code == 304
+            } catch (_: Exception) {
+                false
+            }
+        }
 
         fun getType(t: String?): TvType {
             return when (t) {
@@ -97,26 +191,26 @@ open class SoraStream : TmdbProvider() {
     }
 
     override val mainPage = mainPageOf(
-        "$tmdbAPI/trending/all/day?api_key=$apiKey&region=US" to "Trending",
-        "$tmdbAPI/movie/popular?api_key=$apiKey&region=US" to "Popular Movies",
-        "$tmdbAPI/tv/popular?api_key=$apiKey&region=US&with_original_language=en" to "Popular TV Shows",
-        "$tmdbAPI/tv/airing_today?api_key=$apiKey&region=US&with_original_language=en" to "Airing Today TV Shows",
-        "$tmdbAPI/discover/tv?api_key=$apiKey&with_networks=213" to "Netflix",
-        "$tmdbAPI/discover/tv?api_key=$apiKey&with_networks=1024" to "Amazon",
-        "$tmdbAPI/discover/tv?api_key=$apiKey&with_networks=2739" to "Disney+",
-        "$tmdbAPI/discover/tv?api_key=$apiKey&with_networks=453" to "Hulu",
-        "$tmdbAPI/discover/tv?api_key=$apiKey&with_networks=2552" to "Apple TV+",
-        "$tmdbAPI/discover/tv?api_key=$apiKey&with_networks=49" to "HBO",
-        "$tmdbAPI/discover/tv?api_key=$apiKey&with_networks=4330" to "Paramount+",
-        "$tmdbAPI/discover/tv?api_key=$apiKey&with_networks=3353" to "Peacock",
-        "$tmdbAPI/movie/top_rated?api_key=$apiKey&region=US" to "Top Rated Movies",
-        "$tmdbAPI/tv/top_rated?api_key=$apiKey&region=US" to "Top Rated TV Shows",
-        "$tmdbAPI/movie/upcoming?api_key=$apiKey&region=US" to "Upcoming Movies",
-        "$tmdbAPI/discover/tv?api_key=$apiKey&with_original_language=ko" to "Korean Shows",
-        "$tmdbAPI/discover/tv?api_key=$apiKey&with_keywords=210024|222243&sort_by=popularity.desc&air_date.lte=${getDate().today}&air_date.gte=${getDate().today}" to "Airing Today Anime",
-        "$tmdbAPI/discover/tv?api_key=$apiKey&with_keywords=210024|222243&sort_by=popularity.desc&air_date.lte=${getDate().nextWeek}&air_date.gte=${getDate().today}" to "On The Air Anime",
-        "$tmdbAPI/discover/tv?api_key=$apiKey&with_keywords=210024|222243" to "Anime",
-        "$tmdbAPI/discover/movie?api_key=$apiKey&with_keywords=210024|222243" to "Anime Movies",
+        "/trending/all/day?api_key=$apiKey&region=US" to "Trending",
+        "/movie/popular?api_key=$apiKey&region=US" to "Popular Movies",
+        "/tv/popular?api_key=$apiKey&region=US&with_original_language=en" to "Popular TV Shows",
+        "/tv/airing_today?api_key=$apiKey&region=US&with_original_language=en" to "Airing Today TV Shows",
+        "/discover/tv?api_key=$apiKey&with_networks=213" to "Netflix",
+        "/discover/tv?api_key=$apiKey&with_networks=1024" to "Amazon",
+        "/discover/tv?api_key=$apiKey&with_networks=2739" to "Disney+",
+        "/discover/tv?api_key=$apiKey&with_networks=453" to "Hulu",
+        "/discover/tv?api_key=$apiKey&with_networks=2552" to "Apple TV+",
+        "/discover/tv?api_key=$apiKey&with_networks=49" to "HBO",
+        "/discover/tv?api_key=$apiKey&with_networks=4330" to "Paramount+",
+        "/discover/tv?api_key=$apiKey&with_networks=3353" to "Peacock",
+        "/movie/top_rated?api_key=$apiKey&region=US" to "Top Rated Movies",
+        "/tv/top_rated?api_key=$apiKey&region=US" to "Top Rated TV Shows",
+        "/movie/upcoming?api_key=$apiKey&region=US" to "Upcoming Movies",
+        "/discover/tv?api_key=$apiKey&with_original_language=ko" to "Korean Shows",
+        "/discover/tv?api_key=$apiKey&with_keywords=210024|222243&sort_by=popularity.desc&air_date.lte=${getDate().today}&air_date.gte=${getDate().today}" to "Airing Today Anime",
+        "/discover/tv?api_key=$apiKey&with_keywords=210024|222243&sort_by=popularity.desc&air_date.lte=${getDate().nextWeek}&air_date.gte=${getDate().today}" to "On The Air Anime",
+        "/discover/tv?api_key=$apiKey&with_keywords=210024|222243" to "Anime",
+        "/discover/movie?api_key=$apiKey&with_keywords=210024|222243" to "Anime Movies",
     )
 
     private fun getImageUrl(link: String?): String? {
@@ -130,10 +224,11 @@ open class SoraStream : TmdbProvider() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val apiBase = getApiBase()
         val adultQuery =
             if (settingsForProvider.enableAdult) "" else "&without_keywords=190370|13059|226161|195669"
         val type = if (request.data.contains("/movie")) "movie" else "tv"
-        val home = app.get("${request.data}$adultQuery&page=$page")
+        val home = app.get("$apiBase${request.data}$adultQuery&page=$page")
             .parsedSafe<Results>()?.results?.mapNotNull { media ->
                 media.toSearchResponse(type)
             } ?: throw ErrorLoadingException("Invalid Json reponse")
@@ -154,7 +249,8 @@ open class SoraStream : TmdbProvider() {
     override suspend fun quickSearch(query: String): List<SearchResponse>? = search(query)
 
     override suspend fun search(query: String): List<SearchResponse>? {
-        return app.get("$tmdbAPI/search/multi?api_key=$apiKey&language=en-US&query=$query&page=1&include_adult=${settingsForProvider.enableAdult}")
+        val apiBase = getApiBase()
+        return app.get("$apiBase/search/multi?api_key=$apiKey&language=${langCode ?: "en-US"}&query=$query&page=1&include_adult=${settingsForProvider.enableAdult}")
             .parsedSafe<Results>()?.results?.mapNotNull { media ->
                 media.toSearchResponse()
             }
@@ -177,12 +273,13 @@ open class SoraStream : TmdbProvider() {
     if (data == null || data.id == null) {
         throw ErrorLoadingException("Invalid Data Format: $url")
     }
+        val apiBase = getApiBase()
         val type = getType(data.type)
         val append = "alternative_titles,credits,external_ids,keywords,videos,recommendations"
         val resUrl = if (type == TvType.Movie) {
-            "$tmdbAPI/movie/${data.id}?api_key=$apiKey&append_to_response=$append"
+            "$apiBase/movie/${data.id}?api_key=$apiKey&append_to_response=$append"
         } else {
-            "$tmdbAPI/tv/${data.id}?api_key=$apiKey&append_to_response=$append"
+            "$apiBase/tv/${data.id}?api_key=$apiKey&append_to_response=$append"
         }
         val res = app.get(resUrl).parsedSafe<MediaDetail>()
             ?: throw ErrorLoadingException("Invalid Json Response")
@@ -220,7 +317,7 @@ open class SoraStream : TmdbProvider() {
         return if (type == TvType.TvSeries) {
             val lastSeason = res.last_episode_to_air?.season_number
             val episodes = res.seasons?.mapNotNull { season ->
-                app.get("$tmdbAPI/${data.type}/${data.id}/season/${season.seasonNumber}?api_key=$apiKey")
+                app.get("$apiBase/${data.type}/${data.id}/season/${season.seasonNumber}?api_key=$apiKey")
                     .parsedSafe<MediaDetailEpisodes>()?.episodes?.map { eps ->
                         newEpisode(
                             data = LinkData(
@@ -323,113 +420,106 @@ open class SoraStream : TmdbProvider() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-
         val res = parseJson<LinkData>(data)
+        val isMovie = res.season == null
+        val activeSources = sourceRegistry.filter { source ->
+            when {
+                isMovie && !source.movie -> false
+                !isMovie && !source.tv -> false
+                else -> true
+            }
+        }
+        val semaphore = Semaphore(sourceConcurrency)
 
-        runAllAsync(
-            {
-                invokeVidsrccc(
-                    res.id,
-                    res.imdbId,
-                    res.season,
-                    res.episode,
-                    subtitleCallback,
-                    callback
-                )
-            },
-            {
-                invokeVidsrc(
-                    res.id,
-                    res.imdbId,
-                    res.season,
-                    res.episode,
-                    subtitleCallback,
-                    callback
-                )
-            },
-            {
-                invokeVixsrc(res.id, res.season, res.episode, callback)
-            },
-            {
-                invokeVidlink(res.id, res.season, res.episode, callback)
-            },
-            {
-                invokeVidfast(res.id, res.season, res.episode, subtitleCallback, callback)
-            },
-            {
-                invokeCineSrc(res.id, res.season, res.episode, callback)
-            },
-            {
-                invokeMafiaEmbed(res.id, res.season, res.episode, callback)
-            },
-            {
-                invokeAutoEmbed(res.id, res.season, res.episode, subtitleCallback, callback)
-            },
-            {
-                invoke2Embed(res.id, res.season, res.episode, callback)
-            },
-            {
-                invokeVidsrcMov(res.id, res.imdbId, res.season, res.episode, callback)
-            },
-            {
-                invokeRiveStream(res.id, res.season, res.episode, callback)
-            },
-            {
-                invokeSmashyStream(
-                    res.imdbId,
-                    res.season,
-                    res.episode,
-                    callback
-                )
-            },
-            {
-                if (res.season == null) invokeVembed(res.id, res.imdbId, res.season, callback)
-            },
-            {
-                invokeWyzie(res.id, res.season, res.episode, subtitleCallback)
-            },
-            {
-                invokeWatchsomuch(
-                    res.imdbId,
-                    res.season,
-                    res.episode,
-                    subtitleCallback
-                )
-            },
-            {
-                invokeIdlix(
-                    res.title,
-                    res.year,
-                    res.season,
-                    res.episode,
-                    subtitleCallback,
-                    callback
-                )
-            },
-            {
-                if (res.season == null) {
-                    invokeAzmovies(
-                        res.title,
-                        res.year,
-                        subtitleCallback,
-                        callback
-                    )
+        coroutineScope {
+            activeSources.map { source ->
+                async {
+                    semaphore.withPermit {
+                        invokeSource(source, res, subtitleCallback, callback)
+                    }
                 }
-            },
-            {
-                if (res.season != null) {
-                    invokeNoxx(
-                        res.title,
-                        res.season,
-                        res.episode,
-                        subtitleCallback,
-                        callback
-                    )
-                }
-            },
-            {
+            }.awaitAll()
+        }
+
+        return true
+    }
+
+    private suspend fun invokeSource(
+        source: SourceDescriptor,
+        res: LinkData,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+    ) {
+        when (source.key) {
+            "vidsrccc" -> invokeVidsrccc(
+                res.id,
+                res.imdbId,
+                res.season,
+                res.episode,
+                subtitleCallback,
+                callback
+            )
+
+            "vidsrc" -> invokeVidsrc(
+                res.id,
+                res.imdbId,
+                res.season,
+                res.episode,
+                subtitleCallback,
+                callback
+            )
+
+            "vixsrc" -> invokeVixsrc(res.id, res.season, res.episode, callback)
+            "vidlink" -> invokeVidlink(res.id, res.season, res.episode, callback)
+            "vidfast" -> invokeVidfast(res.id, res.season, res.episode, subtitleCallback, callback)
+            "cinesrc" -> invokeCineSrc(res.id, res.season, res.episode, callback)
+            "mafiaembed" -> invokeMafiaEmbed(res.id, res.season, res.episode, callback)
+            "autoembed" -> invokeAutoEmbed(res.id, res.season, res.episode, subtitleCallback, callback)
+            "2embed" -> invoke2Embed(res.id, res.season, res.episode, callback)
+            "vidsrcmov" -> invokeVidsrcMov(res.id, res.imdbId, res.season, res.episode, callback)
+            "multiembed" -> invokeMultiEmbed(res.imdbId, res.season, res.episode, subtitleCallback, callback)
+            "ninetv" -> invokeNinetv(res.id, res.season, res.episode, subtitleCallback, callback)
+            "ridomovies" -> invokeRidomovies(res.id, res.imdbId, res.season, res.episode, subtitleCallback, callback)
+            "soapy" -> invokeSoapy(res.id, res.season, res.episode, subtitleCallback, callback)
+            "rivestream" -> invokeRiveStream(res.id, res.season, res.episode, callback)
+            "smashystream" -> invokeSmashyStream(res.imdbId, res.season, res.episode, callback)
+            "vembed" -> invokeVembed(res.id, res.imdbId, res.season, callback)
+            "wyzie" -> invokeWyzie(res.id, res.season, res.episode, subtitleCallback)
+            "watchsomuch" -> invokeWatchsomuch(res.imdbId, res.season, res.episode, subtitleCallback)
+            "idlix" -> invokeIdlix(
+                res.title,
+                res.year,
+                res.season,
+                res.episode,
+                subtitleCallback,
+                callback
+            )
+
+            "azmovies" -> invokeAzmovies(
+                res.titleCandidates(),
+                res.year,
+                subtitleCallback,
+                callback
+            )
+
+            "noxx" -> invokeNoxx(
+                res.titleCandidates(),
+                res.season,
+                res.episode,
+                subtitleCallback,
+                callback
+            )
+            "watch32" -> invokeWatch32(
+                res.titleCandidates(),
+                res.season,
+                res.episode,
+                subtitleCallback,
+                callback
+            )
+
+            "kisskh" -> if (res.isAsian || res.isAnime || res.isBollywood) {
                 invokeKisskh(
-                    res.title ?: return@runAllAsync,
+                    res.titleCandidates(),
                     res.year,
                     res.season,
                     res.episode,
@@ -437,9 +527,14 @@ open class SoraStream : TmdbProvider() {
                     callback
                 )
             }
-        )
+        }
+    }
 
-        return true
+    private fun LinkData.titleCandidates(): List<String> {
+        return listOfNotNull(title, orgTitle)
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
     }
 
     data class LinkData(
