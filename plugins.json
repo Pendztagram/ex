@@ -911,10 +911,10 @@
     },
     {
         "iconUrl": "https://github.com/duro92/ExtCloud/blob/main/SoraStream/Icon.png",
-        "fileHash": "sha256-1409ecc6e36664715d72ab9095516fc2681216a45a35f177fddaad27650dec54",
+        "fileHash": "sha256-c542d1747744389968cae62fe5345de863b909836e6c9c5b26de7c688f9e96d5",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 185073,
+        "fileSize": 143780,
         "status": 1,
         "language": "en",
         "authors": [
@@ -954,5 +954,27 @@
         "description": "Winbu",
         "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/Winbu.cs3",
         "name": "Winbu"
+    },
+    {
+        "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://zoronime.online&size=%size%",
+        "fileHash": "sha256-6e2e10f89d2455d2eb2376247c333d0097fb17172ca6c3e0a4d1fa0e2b50a32d",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/Pendztagram/ex",
+        "fileSize": 21835,
+        "status": 1,
+        "language": "id",
+        "authors": [
+            "Duro92"
+        ],
+        "tvTypes": [
+            "Anime",
+            "AnimeMovie",
+            "OVA"
+        ],
+        "version": 1,
+        "internalName": "ZoronimeProvider",
+        "description": "Zoronime",
+        "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/ZoronimeProvider.cs3",
+        "name": "ZoronimeProvider"
     }
 ]
