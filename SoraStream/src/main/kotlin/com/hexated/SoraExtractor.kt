@@ -219,38 +219,39 @@ object SoraExtractor : SoraStream() {
             "$vidSrcAPI/embed/tv?imdb=$imdbId&season=$season&episode=$episode"
         }
 
-        app.get(url).document.select(".serversList .server").amap { server ->
-            when {
-                server.text().equals("CloudStream Pro", ignoreCase = true) -> {
-                    val hash =
-                        app.get("$api/rcp/${server.attr("data-hash")}").text.substringAfter("/prorcp/")
-                            .substringBefore("'")
-                    val res = app.get("$api/prorcp/$hash").text
-                    val m3u8Link = Regex("https:.*\\.m3u8").find(res)?.value
-
-                    callback.invoke(
-                        newExtractorLink(
-                            "Vidsrc",
-                            "Vidsrc",
-                            m3u8Link ?: return@amap,
-                            ExtractorLinkType.M3U8
-                        )
-                    )
-                }
-
-                server.text().equals("2Embed", ignoreCase = true) -> {
-                    return@amap
-                }
-
-                server.text().equals("Superembed", ignoreCase = true) -> {
-                    return@amap
-                }
-
-                else -> {
-                    return@amap
-                }
+        val document = app.get(url).document
+        val playerIframe = document.selectFirst("iframe#player_iframe")?.attr("src")
+            ?.let { iframe ->
+                if (iframe.startsWith("//")) "https:$iframe" else iframe
             }
-        }
+
+        val rcpPath = when {
+            !playerIframe.isNullOrBlank() && playerIframe.contains("/rcp/") -> playerIframe
+            else -> document.select(".serversList .server")
+                .firstOrNull { it.text().equals("CloudStream Pro", ignoreCase = true) }
+                ?.attr("data-hash")
+                ?.takeIf { it.isNotBlank() }
+                ?.let { "$api/rcp/$it" }
+        } ?: return
+
+        val hash = app.get(rcpPath, referer = url).text
+            .substringAfter("/prorcp/")
+            .substringBefore("'")
+            .ifBlank { return }
+
+        val res = app.get("$api/prorcp/$hash", referer = "$api/").text
+        val m3u8Link = Regex("""https:.*?\.m3u8[^"'\\\s]*""").find(res)?.value ?: return
+
+        callback.invoke(
+            newExtractorLink(
+                "Vidsrc",
+                "Vidsrc",
+                m3u8Link,
+                ExtractorLinkType.M3U8
+            ) {
+                this.referer = "$api/"
+            }
+        )
 
     }
 
@@ -602,46 +603,18 @@ object SoraExtractor : SoraStream() {
         episode: Int?,
         callback: (ExtractorLink) -> Unit,
     ) {
-        val proxy = "https://proxy.heistotron.uk"
-        val type = if (season == null) "movie" else "tv"
         val url = if (season == null) {
-            "$vixsrcAPI/$type/$tmdbId"
+            "$vixsrcAPI/movie/$tmdbId"
         } else {
-            "$vixsrcAPI/$type/$tmdbId/$season/$episode"
+            "$vixsrcAPI/tv/$tmdbId/$season/$episode"
         }
-
-        val res =
-            app.get(url).document.selectFirst("script:containsData(window.masterPlaylist)")?.data()
-                ?: return
-
-        val video1 =
-            Regex("""'token':\s*'(\w+)'[\S\s]+'expires':\s*'(\w+)'[\S\s]+url:\s*'(\S+)'""").find(res)
-                ?.let {
-                    val (token, expires, path) = it.destructured
-                    "$path?token=$token&expires=$expires&h=1&lang=en"
-                } ?: return
-
-        val video2 =
-            "$proxy/p/${base64Encode("$proxy/api/proxy/m3u8?url=${encode(video1)}&source=sakura|ananananananananaBatman!".toByteArray())}"
-
-        listOf(
-            VixsrcSource("Vixsrc [Alpha]",video1,url),
-            VixsrcSource("Vixsrc [Beta]", video2, "$vixsrcAPI/"),
-        ).map {
-            callback.invoke(
-                newExtractorLink(
-                    it.name,
-                    it.name,
-                    it.url,
-                    ExtractorLinkType.M3U8
-                ) {
-                    this.referer = it.referer
-                    this.headers = mapOf(
-                        "Accept" to "*/*"
-                    )
-                }
-            )
-        }
+        invokeWebviewEmbedSource(
+            "Vixsrc",
+            url,
+            "$vixsrcAPI/",
+            vixsrcAPI,
+            callback
+        )
 
     }
 
