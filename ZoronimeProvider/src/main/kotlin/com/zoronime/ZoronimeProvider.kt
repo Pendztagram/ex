@@ -13,7 +13,7 @@ import java.net.URLEncoder
 
 class ZoronimeProvider : MainAPI() {
     override var mainUrl = "https://zoronime.online"
-    override var name = "Zoronime"
+    override var name = "Zoronime😵"
     override var lang = "id"
     override val hasMainPage = true
     override val hasDownloadSupport = true
@@ -27,7 +27,6 @@ class ZoronimeProvider : MainAPI() {
     override val mainPage = mainPageOf(
         "ongoing?page=%d" to "Ongoing",
         "completed?page=%d" to "Completed",
-        "anime?page=%d" to "Anime A-Z",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {

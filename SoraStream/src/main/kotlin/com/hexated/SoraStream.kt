@@ -359,7 +359,7 @@ open class SoraStream : TmdbProvider() {
                 invokeMafiaEmbed(res.id, res.season, res.episode, callback)
             },
             {
-                invokeAutoEmbed(res.id, res.season, res.episode, callback)
+                invokeAutoEmbed(res.id, res.season, res.episode, subtitleCallback, callback)
             },
             {
                 invoke2Embed(res.id, res.season, res.episode, callback)

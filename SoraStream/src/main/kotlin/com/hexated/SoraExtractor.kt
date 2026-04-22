@@ -649,6 +649,7 @@ object SoraExtractor : SoraStream() {
         tmdbId: Int?,
         season: Int?,
         episode: Int?,
+        subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
     ) {
         val url = if (season == null) {
@@ -657,13 +658,36 @@ object SoraExtractor : SoraStream() {
             "$autoEmbedAPI/tv/tmdb/$tmdbId-$season-$episode"
         }
 
-        invokeWebviewEmbedSource(
-            "AutoEmbed",
-            url,
-            "$autoEmbedAPI/",
-            autoEmbedAPI,
-            callback
-        )
+        val referer = "$autoEmbedAPI/"
+        val document = app.get(url, referer = referer).document
+        val serverUrls = document.select(".servers [data-url]").mapNotNull { server ->
+            server.attr("data-url").takeIf { it.isNotBlank() }?.let { fixUrl(it, autoEmbedAPI) }
+        }.distinct()
+
+        var emitted = false
+        serverUrls.forEach { serverUrl ->
+            when {
+                loadVidsrcXpass(serverUrl, season != null, referer, callback) -> {
+                    emitted = true
+                }
+                else -> {
+                    loadExtractor(serverUrl, referer, subtitleCallback) { link ->
+                        emitted = true
+                        callback.invoke(link)
+                    }
+                }
+            }
+        }
+
+        if (!emitted) {
+            invokeWebviewEmbedSource(
+                "AutoEmbed",
+                url,
+                referer,
+                autoEmbedAPI,
+                callback
+            )
+        }
     }
 
     suspend fun invoke2Embed(
