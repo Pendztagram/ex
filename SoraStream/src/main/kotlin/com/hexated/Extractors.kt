@@ -25,13 +25,18 @@ open class Jeniusplay2 : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val pageRef = if (url.contains("/video/")) url.substringBefore("#") else "$mainUrl/"
+        val normalizedUrl = if (url.startsWith("//")) "https:$url" else url
+        val pageRef = referer?.takeIf { it.isNotBlank() }
+            ?: normalizedUrl.substringBefore("#").takeIf { it.contains("jeniusplay", true) }
+            ?: "$mainUrl/"
         val document = app.get(
-            url,
-            referer = referer ?: pageRef,
+            normalizedUrl,
+            referer = pageRef,
             interceptor = cloudflareInterceptor
         ).document
-        val hash = url.split("/").last().substringAfter("data=")
+        val hash = Regex("""[?&]data=([^&#]+)""").find(normalizedUrl)?.groupValues?.getOrNull(1)
+            ?: normalizedUrl.split("/").lastOrNull()?.substringAfter("data=")
+            ?: return
 
         val response = app.post(
             url = "$mainUrl/player/index.php?data=$hash&do=getVideo",
@@ -59,7 +64,7 @@ open class Jeniusplay2 : ExtractorApi() {
             ?: return
         val streamHeaders = mapOf(
             "Origin" to mainUrl,
-            "Referer" to pageRef,
+            "Referer" to "$mainUrl/",
             "Accept" to "*/*"
         )
 
@@ -67,7 +72,7 @@ open class Jeniusplay2 : ExtractorApi() {
             M3u8Helper.generateM3u8(
                 name,
                 streamUrl,
-                pageRef,
+                "$mainUrl/",
                 headers = streamHeaders
             ).forEach(callback)
         } else {

@@ -94,7 +94,7 @@ object SoraExtractor : SoraStream() {
                 }
             } ?: return@amap
             when {
-                source.startsWith("https://jeniusplay.com") -> {
+                source.contains("jeniusplay", true) -> {
                     Jeniusplay2().getUrl(source, "$referer/", subtitleCallback, callback)
                 }
 
@@ -1288,6 +1288,9 @@ object SoraExtractor : SoraStream() {
             val videoLink = sources?.video
             val thirdParty = sources?.thirdParty
 
+            val episodeReferer =
+                "$mainUrl/Drama/${matched.title?.let { getKisskhTitle(it) }.orEmpty()}/Episode-${targetEp.number?.toInt() ?: episode}?id=$dramaId&ep=$epsId&page=0&pageSize=100"
+
             listOfNotNull(videoLink, thirdParty).forEach { link ->
                 if (link.contains(".m3u8")) {
                     M3u8Helper.generateM3u8(
@@ -1306,6 +1309,13 @@ object SoraExtractor : SoraStream() {
                         ) {
                             this.referer = mainUrl
                         }
+                    )
+                } else {
+                    loadExtractor(
+                        link.substringBefore("=http"),
+                        episodeReferer,
+                        subtitleCallback,
+                        callback
                     )
                 }
             }
