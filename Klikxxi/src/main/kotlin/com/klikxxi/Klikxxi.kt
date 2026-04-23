@@ -78,11 +78,16 @@ class Klikxxi : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-    val url = if (page == 1) {
-        // Hapus "page/%d/" dan biarkan jadi "tv/"
+    val requestData = when {
+        request.data.contains("%d") -> request.data.format(page)
+        else -> request.data
+    }
+
+    val url = if (page == 1 && request.data.contains("page/%d/")) {
+        // Untuk kategori path-style, page pertama cukup pakai base path tanpa suffix page.
         "$mainUrl/${request.data.replace("page/%d/", "")}"
     } else {
-        "$mainUrl/${request.data.format(page)}"
+        "$mainUrl/$requestData"
     }.replace("//", "/")
      .replace(":/", "://")
 
