@@ -222,10 +222,12 @@ object SoraExtractor : SoraStream() {
         callback: (ExtractorLink) -> Unit,
     ) {
         val api = "https://cloudnestra.com"
-        val imdbUrl = if (season == null) {
-            "$vidSrcAPI/embed/movie?imdb=$imdbId"
-        } else {
-            "$vidSrcAPI/embed/tv?imdb=$imdbId&season=$season&episode=$episode"
+        val imdbUrl = imdbId?.takeIf { it.isNotBlank() }?.let {
+            if (season == null) {
+                "$vidSrcAPI/embed/movie?imdb=$it"
+            } else {
+                "$vidSrcAPI/embed/tv?imdb=$it&season=$season&episode=$episode"
+            }
         }
         val legacyUrl = tmdbId?.let {
             if (season == null) {
@@ -241,21 +243,19 @@ object SoraExtractor : SoraStream() {
                 "https://vsembed.ru/embed/$it/${season}-${episode}"
             }
         }
-        val candidateUrls = listOfNotNull(imdbUrl, legacyUrl, vsembedUrl).distinct()
+        val vidsrcMeUrl = tmdbId?.let {
+            if (season == null) {
+                "$vidsrcMeAPI/embed/movie/$it"
+            } else {
+                "$vidsrcMeAPI/embed/tv/$it/$season/$episode"
+            }
+        }
+        val candidateUrls = listOfNotNull(imdbUrl, legacyUrl, vsembedUrl, vidsrcMeUrl).distinct()
 
         if (candidateUrls.any { loadVidsrcXpass(it, season != null, "$vidSrcAPI/", callback) }) return
 
-        var emitted = false
-        candidateUrls.forEach { embedUrl ->
-            loadExtractor(embedUrl, null, subtitleCallback) { link ->
-                emitted = true
-                callback.invoke(link)
-            }
-        }
-
-        if (emitted) return
-
-        val document = app.get(imdbUrl).document
+        val primaryUrl = imdbUrl ?: legacyUrl ?: vidsrcMeUrl ?: return
+        val document = app.get(primaryUrl).document
         val playerIframe = document.selectFirst("iframe#player_iframe")?.attr("src")
             ?.let { iframe ->
                 if (iframe.startsWith("//")) "https:$iframe" else iframe
@@ -270,7 +270,7 @@ object SoraExtractor : SoraStream() {
                 ?.let { "$api/rcp/$it" }
         } ?: return
 
-        val hash = app.get(rcpPath, referer = imdbUrl).text
+        val hash = app.get(rcpPath, referer = primaryUrl).text
             .substringAfter("/prorcp/")
             .substringBefore("'")
             .ifBlank { return }
@@ -606,6 +606,7 @@ object SoraExtractor : SoraStream() {
         )
 
         val mediaUrl = mediaRes.url
+        if (!isReliableCineSrcMediaUrl(mediaUrl)) return
         val mediaType = when {
             mediaUrl.contains(".m3u8", ignoreCase = true) -> ExtractorLinkType.M3U8
             mediaUrl.contains(".mp4", ignoreCase = true) -> INFER_TYPE
@@ -1638,6 +1639,17 @@ object SoraExtractor : SoraStream() {
     }
 
     private fun String.urlEncodeCompat(): String = URLEncoder.encode(this, "UTF-8")
+
+    private fun isReliableCineSrcMediaUrl(url: String): Boolean {
+        if (url.isBlank()) return false
+        val lowerUrl = url.lowercase()
+        if (lowerUrl.contains(".m3u8")) return true
+        if (!lowerUrl.contains(".mp4")) return false
+        val host = runCatching { java.net.URI(url).host.orEmpty().lowercase() }.getOrDefault("")
+        if (host.contains("cinesrc.") || host.contains("cineflix.")) return false
+        if (lowerUrl.contains("/intro") || lowerUrl.contains("intro.") || lowerUrl.contains("bumper")) return false
+        return true
+    }
 
     private suspend fun parseRiveStreamSource(source: RiveStreamVideo): ExtractorLink? {
         val rawUrl = source.url?.takeIf { it.isNotBlank() } ?: return null
