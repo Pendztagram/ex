@@ -873,7 +873,9 @@ class AnimeSailProvider : MainAPI() {
 
 }
 
-class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") : Interceptor {
+class TurnstileInterceptor(
+    private val targetCookies: List<String> = listOf("cf_clearance", "_as_turnstile")
+) : Interceptor {
     companion object {
         private const val POLL_INTERVAL_MS = 500L
         private const val MAX_ATTEMPTS = 30
@@ -883,16 +885,42 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
         val raw = CookieManager.getInstance().getCookie(domainUrl) ?: return null
         return raw.split(";")
             .map { it.trim() }
-            .firstOrNull { it.startsWith("$targetCookie=") }
-            ?.substringAfter("=")
-            ?.takeIf { it.isNotBlank() }
+            .firstNotNullOfOrNull { cookie ->
+                targetCookies.firstOrNull { target -> cookie.startsWith("$target=") }
+                    ?.let { cookie.substringAfter("=") }
+                    ?.takeIf { it.isNotBlank() }
+            }
     }
 
     private fun invalidateCookie(domainUrl: String) {
         CookieManager.getInstance().apply {
-            setCookie(domainUrl, "$targetCookie=; Max-Age=0")
+            targetCookies.forEach { cookie ->
+                setCookie(domainUrl, "$cookie=; Max-Age=0")
+            }
             flush()
         }
+    }
+
+    private fun hasChallenge(response: Response): Boolean {
+        if (response.code == 403 || response.code == 429 || response.code == 503) return true
+
+        val contentType = response.header("Content-Type").orEmpty()
+        if (!contentType.contains("text/html", ignoreCase = true)) return false
+
+        val preview = runCatching { response.peekBody(128 * 1024).string() }.getOrDefault("")
+        if (preview.isBlank()) return false
+
+        val challengeHints = listOf(
+            "cf-challenge",
+            "cf-browser-verification",
+            "cf_clearance",
+            "challenge-platform",
+            "Just a moment",
+            "Attention Required",
+            "turnstile",
+            "/cdn-cgi/challenge-platform/"
+        )
+        return challengeHints.any { preview.contains(it, ignoreCase = true) }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -907,7 +935,7 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
                     .header("Cookie", cookieManager.getCookie(domainUrl) ?: "")
                     .build()
             )
-            if (response.code != 403 && response.code != 503) return response
+            if (!hasChallenge(response)) return response
             response.close()
             invalidateCookie(domainUrl)
         }
@@ -959,11 +987,15 @@ class TurnstileInterceptor(private val targetCookie: String = "_as_turnstile") :
         }
 
         val finalCookies = cookieManager.getCookie(domainUrl) ?: ""
-        return chain.proceed(
+        val finalResponse = chain.proceed(
             originalRequest.newBuilder()
                 .header("Cookie", finalCookies)
                 .apply { if (resolvedUserAgent.isNotBlank()) header("User-Agent", resolvedUserAgent) }
                 .build()
         )
+
+        if (!hasChallenge(finalResponse)) return finalResponse
+
+        return finalResponse
     }
 }

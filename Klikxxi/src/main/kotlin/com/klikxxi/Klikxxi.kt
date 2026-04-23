@@ -1,6 +1,13 @@
 package com.klikxxi
 
+import android.annotation.SuppressLint
+import android.os.Handler
+import android.os.Looper
+import android.webkit.CookieManager
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.AcraApplication
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addScore
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
@@ -11,6 +18,9 @@ import com.lagradost.cloudstream3.mainPageOf
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.httpsify
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.nicehttp.NiceResponse
+import okhttp3.Interceptor
+import okhttp3.Response
 import org.jsoup.nodes.Element
 import java.net.URI
 
@@ -26,6 +36,35 @@ class Klikxxi : MainAPI() {
 
     override val supportedTypes =
         setOf(TvType.Movie, TvType.TvSeries, TvType.Anime, TvType.AsianDrama)
+
+    private val turnstileInterceptor = KlikxxiTurnstileInterceptor()
+    private val defaultHeaders = mapOf(
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36"
+    )
+
+    private suspend fun request(url: String, ref: String? = null): NiceResponse {
+        return app.get(
+            url,
+            interceptor = turnstileInterceptor,
+            headers = defaultHeaders,
+            referer = ref
+        )
+    }
+
+    private suspend fun requestPost(
+        url: String,
+        data: Map<String, String>,
+        ref: String? = null
+    ): NiceResponse {
+        return app.post(
+            url,
+            interceptor = turnstileInterceptor,
+            headers = defaultHeaders,
+            referer = ref,
+            data = data
+        )
+    }
     
 
     /** Main page: Film Terbaru & Series Terbaru */
@@ -45,9 +84,11 @@ class Klikxxi : MainAPI() {
     }.replace("//", "/")
      .replace(":/", "://")
 
-    val document = app.get(url).document
+    val document = request(url).document
 
-    val items = document.select("article.has-post-thumbnail, article.item, article.item-infinite")
+    val items = document.select(
+        "article.has-post-thumbnail, article.item, article.item-infinite, div.latestMovie article, div.latestSeri article"
+    )
         .mapNotNull { it.toSearchResult() }
 
     return newHomePageResponse(request.name, items)
@@ -119,8 +160,9 @@ class Klikxxi : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val document = app.get("$mainUrl/?s=$query", timeout = 50L).document
-        return document.select("article.item").mapNotNull { it.toSearchResult() }
+        val document = request("$mainUrl/?s=$query").document
+        return document.select("article.item, article.has-post-thumbnail, article.item-infinite")
+            .mapNotNull { it.toSearchResult() }
     }
 
     /** Kadang rekomendasi punya struktur HTML beda */
@@ -138,7 +180,7 @@ class Klikxxi : MainAPI() {
        ======================= */
 
     override suspend fun load(url: String): LoadResponse {
-        val fetch = app.get(url)
+        val fetch = request(url, ref = mainUrl)
         val document = fetch.document
 
         // Title tanpa Season/Episode/Year
@@ -272,7 +314,7 @@ class Klikxxi : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data).document
+        val document = request(data, ref = mainUrl).document
         val postId = document
             .selectFirst("div#muvipro_player_content_id")
             ?.attr("data-id")
@@ -283,8 +325,9 @@ class Klikxxi : MainAPI() {
             val tabId = tab.attr("id")
             if (tabId.isNullOrBlank()) return@forEach
 
-            val response = app.post(
+            val response = requestPost(
                 "$mainUrl/wp-admin/admin-ajax.php",
+                ref = data,
                 data = mapOf(
                     "action" to "muvipro_player_content",
                     "tab" to tabId,
@@ -349,5 +392,100 @@ class Klikxxi : MainAPI() {
     /** Base URL dari sebuah URL (scheme + host) */
     private fun getBaseUrl(url: String): String {
         return URI(url).let { "${it.scheme}://${it.host}" }
+    }
+}
+
+class KlikxxiTurnstileInterceptor(private val targetCookie: String = "cf_clearance") : Interceptor {
+    companion object {
+        private const val POLL_INTERVAL_MS = 500L
+        private const val MAX_ATTEMPTS = 30
+    }
+
+    private fun getCookieValue(domainUrl: String): String? {
+        val raw = CookieManager.getInstance().getCookie(domainUrl) ?: return null
+        return raw.split(";")
+            .map { it.trim() }
+            .firstOrNull { it.startsWith("$targetCookie=") }
+            ?.substringAfter("=")
+            ?.takeIf { it.isNotBlank() }
+    }
+
+    private fun invalidateCookie(domainUrl: String) {
+        CookieManager.getInstance().apply {
+            setCookie(domainUrl, "$targetCookie=; Max-Age=0")
+            flush()
+        }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val originalRequest = chain.request()
+        val url = originalRequest.url.toString()
+        val domainUrl = "${originalRequest.url.scheme}://${originalRequest.url.host}"
+        val cookieManager = CookieManager.getInstance()
+        if (getCookieValue(domainUrl) != null) {
+            val response = chain.proceed(
+                originalRequest.newBuilder()
+                    .header("Cookie", cookieManager.getCookie(domainUrl) ?: "")
+                    .build()
+            )
+            if (response.code != 403 && response.code != 503) return response
+            response.close()
+            invalidateCookie(domainUrl)
+        }
+
+        val context = AcraApplication.context
+            ?: return chain.proceed(originalRequest)
+
+        val handler = Handler(Looper.getMainLooper())
+        var webView: WebView? = null
+        var resolvedUserAgent = originalRequest.header("User-Agent") ?: ""
+
+        handler.post {
+            try {
+                val wv = WebView(context).also { webView = it }
+                wv.settings.apply {
+                    javaScriptEnabled = true
+                    domStorageEnabled = true
+                    if (resolvedUserAgent.isNotBlank()) userAgentString = resolvedUserAgent
+                    resolvedUserAgent = userAgentString
+                }
+                wv.webViewClient = WebViewClient()
+                wv.loadUrl(url)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        var attempts = 0
+        while (attempts < MAX_ATTEMPTS) {
+            Thread.sleep(POLL_INTERVAL_MS)
+            if (getCookieValue(domainUrl) != null) {
+                cookieManager.flush()
+                break
+            }
+            attempts++
+        }
+
+        handler.post {
+            try {
+                webView?.apply {
+                    stopLoading()
+                    clearCache(false)
+                    destroy()
+                }
+                webView = null
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        val finalCookies = cookieManager.getCookie(domainUrl) ?: ""
+        return chain.proceed(
+            originalRequest.newBuilder()
+                .header("Cookie", finalCookies)
+                .apply { if (resolvedUserAgent.isNotBlank()) header("User-Agent", resolvedUserAgent) }
+                .build()
+        )
     }
 }
