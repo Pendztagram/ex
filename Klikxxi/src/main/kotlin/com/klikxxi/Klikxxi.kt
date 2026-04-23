@@ -23,6 +23,8 @@ import okhttp3.Interceptor
 import okhttp3.Response
 import org.jsoup.nodes.Element
 import java.net.URI
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 
 class Klikxxi : MainAPI() {
@@ -427,10 +429,17 @@ class KlikxxiTurnstileInterceptor(
     companion object {
         private const val POLL_INTERVAL_MS = 500L
         private const val MAX_ATTEMPTS = 60
+        private const val PAGE_WAIT_SECONDS = 45L
     }
 
-    private fun getCookieValue(domainUrl: String): String? {
-        val raw = CookieManager.getInstance().getCookie(domainUrl) ?: return null
+    private fun getCookieHeader(url: String, domainUrl: String): String {
+        val manager = CookieManager.getInstance()
+        return manager.getCookie(url) ?: manager.getCookie(domainUrl) ?: ""
+    }
+
+    private fun getCookieValue(url: String, domainUrl: String): String? {
+        val raw = getCookieHeader(url, domainUrl)
+        if (raw.isBlank()) return null
         return raw.split(";")
             .map { it.trim() }
             .firstNotNullOfOrNull { cookie ->
@@ -478,10 +487,10 @@ class KlikxxiTurnstileInterceptor(
         val url = originalRequest.url.toString()
         val domainUrl = "${originalRequest.url.scheme}://${originalRequest.url.host}"
         val cookieManager = CookieManager.getInstance()
-        if (getCookieValue(domainUrl) != null) {
+        if (getCookieValue(url, domainUrl) != null) {
             val response = chain.proceed(
                 originalRequest.newBuilder()
-                    .header("Cookie", cookieManager.getCookie(domainUrl) ?: "")
+                    .header("Cookie", getCookieHeader(url, domainUrl))
                     .build()
             )
             if (!hasChallenge(response)) return response
@@ -495,30 +504,44 @@ class KlikxxiTurnstileInterceptor(
         val handler = Handler(Looper.getMainLooper())
         var webView: WebView? = null
         var resolvedUserAgent = originalRequest.header("User-Agent") ?: ""
+        val challengeLatch = CountDownLatch(1)
 
         handler.post {
             try {
                 val wv = WebView(context).also { webView = it }
+                CookieManager.getInstance().setAcceptCookie(true)
+                CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true)
                 wv.settings.apply {
                     javaScriptEnabled = true
                     domStorageEnabled = true
+                    databaseEnabled = true
+                    javaScriptCanOpenWindowsAutomatically = true
+                    loadsImagesAutomatically = true
                     if (resolvedUserAgent.isNotBlank()) userAgentString = resolvedUserAgent
                     resolvedUserAgent = userAgentString
                 }
-                wv.webViewClient = WebViewClient()
+                wv.webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView, finishedUrl: String) {
+                        super.onPageFinished(view, finishedUrl)
+                        cookieManager.flush()
+                        if (getCookieValue(finishedUrl, domainUrl) != null) {
+                            challengeLatch.countDown()
+                        }
+                    }
+                }
                 wv.loadUrl(url)
             } catch (e: Exception) {
+                challengeLatch.countDown()
                 e.printStackTrace()
             }
         }
 
+        challengeLatch.await(PAGE_WAIT_SECONDS, TimeUnit.SECONDS)
+
         var attempts = 0
-        while (attempts < MAX_ATTEMPTS) {
+        while (attempts < MAX_ATTEMPTS && getCookieValue(url, domainUrl) == null) {
             Thread.sleep(POLL_INTERVAL_MS)
-            if (getCookieValue(domainUrl) != null) {
-                cookieManager.flush()
-                break
-            }
+            cookieManager.flush()
             attempts++
         }
 
@@ -535,7 +558,7 @@ class KlikxxiTurnstileInterceptor(
             }
         }
 
-        val finalCookies = cookieManager.getCookie(domainUrl) ?: ""
+        val finalCookies = getCookieHeader(url, domainUrl)
         val finalResponse = chain.proceed(
             originalRequest.newBuilder()
                 .header("Cookie", finalCookies)
