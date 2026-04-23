@@ -45,10 +45,10 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://154.26.137.28&size=%size%",
-        "fileHash": "sha256-53620eda6031767d21a0a57cda70ea47bf75bd46d2b26213b94daa87c713e623",
+        "fileHash": "sha256-e4462a2d4426d0eb476a34ac2e87e28703ec15a3e2e4758554676c63e68c9caa",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 57645,
+        "fileSize": 58348,
         "status": 1,
         "language": "id",
         "authors": [
@@ -501,10 +501,10 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://klikxxi.fit&size=%size%",
-        "fileHash": "sha256-caefb23ecb07d8c7a0d98bc016590998e0d10818dfdc853bbebd570dfee14492",
+        "fileHash": "sha256-972358ca08fbe8846a62020fc7feef9f414bb82c7ec1e977ae333fdc360f957a",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 21034,
+        "fileSize": 24726,
         "status": 1,
         "language": "id",
         "authors": [
