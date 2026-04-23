@@ -218,8 +218,8 @@ class Klikxxi : MainAPI() {
 
         // Title tanpa Season/Episode/Year
         val title = document
-            .selectFirst("h1.entry-title, div.mvic-desc h3")
-            ?.text()
+            .selectFirst("h1.entry-title, div.mvic-desc h3, h1, .entry-title")
+            ?.text()?.trim()
             ?.substringBefore("Season")
             ?.substringBefore("Episode")
             ?.substringBefore("(")
@@ -227,41 +227,55 @@ class Klikxxi : MainAPI() {
             .orEmpty()
 
         val poster = document
-            .selectFirst("figure.pull-left > img, .mvic-thumb img, .poster img")
+            .selectFirst("figure.pull-left > img, .mvic-thumb img, .poster img, .gmr-movie-data img, .thumb img, img.wp-post-image")
             .fixPoster()
             ?.let { fixUrl(it) }
 
-        val description = document.selectFirst(
-            "div[itemprop=description] > p, " +
-                "div.desc p.f-desc, " +
-                "div.entry-content > p"
-        )
-            ?.text()
-            ?.trim()
+        val description = listOfNotNull(
+            document.selectFirst(
+                "div[itemprop=description] > p, " +
+                    "div.desc p.f-desc, " +
+                    "div.entry-content > p, " +
+                    ".gmr-movie-data .entry-content p, " +
+                    ".synopsis, .excerpt, .entry-content p"
+            )?.text()?.trim(),
+            document.selectFirst("meta[property=og:description]")?.attr("content")?.trim(),
+            document.selectFirst("meta[name=description]")?.attr("content")?.trim()
+        ).firstOrNull { !it.isNullOrBlank() }
 
-        val tags = document.select("strong:contains(Genre) ~ a").eachText()
+        val tags = document.select(
+            "strong:contains(Genre) ~ a, " +
+                ".gmr-moviedata:contains(Genre) a, " +
+                ".genxed a, .genre a"
+        ).eachText().distinct()
 
-        val year = document
-            .select("div.gmr-moviedata strong:contains(Year:) > a")
-            .text()
-            .toIntOrNull()
+        val year = listOfNotNull(
+            document.select("div.gmr-moviedata strong:contains(Year:) > a").text(),
+            document.select("strong:contains(Year) ~ a").text(),
+            Regex("""\b(19|20)\d{2}\b""").find(
+                document.selectFirst("div.gmr-moviedata, .gmr-movie-data, .entry-content")?.text().orEmpty()
+            )?.value
+        ).firstNotNullOfOrNull { it.toIntOrNull() }
 
         val trailer = document
-            .selectFirst("ul.gmr-player-nav li a.gmr-trailer-popup")
+            .selectFirst("ul.gmr-player-nav li a.gmr-trailer-popup, a.gmr-trailer-popup, a[href*='youtube'], a[href*='youtu.be']")
             ?.attr("href")
 
-        val rating = document
-            .selectFirst("span[itemprop=ratingValue]")
-            ?.text()
-            ?.toDoubleOrNull()
+        val rating = listOfNotNull(
+            document.selectFirst("span[itemprop=ratingValue]")?.text()?.trim(),
+            document.selectFirst(".gmr-rating-item")?.ownText()?.trim(),
+            document.selectFirst(".gmr-rating-item, .rating")?.text()?.trim()
+        ).firstNotNullOfOrNull { text ->
+            Regex("""\d+(\.\d+)?""").find(text)?.value?.toDoubleOrNull()
+        }
 
         val actors = document
-            .select("div.gmr-moviedata span[itemprop=actors] a")
+            .select("div.gmr-moviedata span[itemprop=actors] a, .gmr-movie-data span[itemprop=actors] a, .cast a")
             .map { it.text() }
             .takeIf { it.isNotEmpty() }
 
         val recommendations = document
-    .select("article.item.col-md-20")
+    .select("article.item.col-md-20, article.item, article.has-post-thumbnail")
     .mapNotNull { it.toRecommendResult() }
 
         /* ===== Ambil Episodes (kalau TV Series) ===== */
@@ -385,26 +399,56 @@ class Klikxxi : MainAPI() {
     private fun Element?.fixPoster(): String? {
     if (this == null) return null
 
-    // Prioritas 1: srcset (ambil resolusi terbesar)
-    if (this.hasAttr("srcset")) {
-        val srcset = this.attr("srcset").trim()
+    fun pickFromSrcset(value: String?): String? {
+        if (value.isNullOrBlank()) return null
+        val srcset = value.trim()
         val best = srcset.split(",")
             .map { it.trim().split(" ")[0] }
-            .lastOrNull()  // paling besar selalu di akhir
-        if (!best.isNullOrBlank()) return fixUrl(best.fixImageQuality())
+            .lastOrNull()
+        return best?.takeIf {
+            it.isNotBlank() &&
+                !it.startsWith("data:", true) &&
+                !it.contains("placeholder", true) &&
+                !it.endsWith(".svg", true)
+        }
+    }
+
+    // Prioritas 1: srcset variants
+    val bestSrcset = pickFromSrcset(
+        when {
+            this.hasAttr("data-lazy-srcset") -> this.attr("data-lazy-srcset")
+            this.hasAttr("data-srcset") -> this.attr("data-srcset")
+            this.hasAttr("srcset") -> this.attr("srcset")
+            else -> null
+        }
+    )
+    if (!bestSrcset.isNullOrBlank()) {
+        return fixUrl(bestSrcset.fixImageQuality())
     }
 
     // Prioritas 2: data-src atau data-lazy
-    val dataSrc = when {
+    val dataSrc = listOfNotNull(
+        when {
         this.hasAttr("data-lazy-src") -> this.attr("data-lazy-src")
         this.hasAttr("data-src") -> this.attr("data-src")
+        this.hasAttr("data-original") -> this.attr("data-original")
+        this.hasAttr("data-cfsrc") -> this.attr("data-cfsrc")
         else -> null
+        },
+        this.attr("src").takeIf { it.isNotBlank() && !it.startsWith("data:", true) }
+    ).firstOrNull {
+        !it.isNullOrBlank() &&
+            !it.startsWith("data:", true) &&
+            !it.contains("placeholder", true) &&
+            !it.endsWith(".svg", true)
     }
     if (!dataSrc.isNullOrBlank()) return fixUrl(dataSrc.fixImageQuality())
 
     // Prioritas 3: src biasa
     val src = this.attr("src")
-    if (!src.isNullOrBlank()) return fixUrl(src.fixImageQuality())
+    if (!src.isNullOrBlank() && !src.startsWith("data:", true) && !src.endsWith(".svg", true)) {
+        return fixUrl(src.fixImageQuality())
+    }
 
     return null
 }
@@ -432,9 +476,9 @@ class KlikxxiTurnstileInterceptor(
     private val targetCookies: List<String> = listOf("cf_clearance", "__cf_bm")
 ) : Interceptor {
     companion object {
-        private const val POLL_INTERVAL_MS = 500L
-        private const val MAX_ATTEMPTS = 60
-        private const val PAGE_WAIT_SECONDS = 45L
+        private const val POLL_INTERVAL_MS = 250L
+        private const val MAX_ATTEMPTS = 32
+        private const val PAGE_WAIT_SECONDS = 12L
     }
 
     private fun getCookieHeader(url: String, domainUrl: String): String {
@@ -510,6 +554,7 @@ class KlikxxiTurnstileInterceptor(
         var webView: WebView? = null
         var resolvedUserAgent = originalRequest.header("User-Agent") ?: ""
         val challengeLatch = CountDownLatch(1)
+        var pageFinished = false
 
         handler.post {
             try {
@@ -528,10 +573,9 @@ class KlikxxiTurnstileInterceptor(
                 wv.webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView, finishedUrl: String) {
                         super.onPageFinished(view, finishedUrl)
+                        pageFinished = true
                         cookieManager.flush()
-                        if (getCookieValue(finishedUrl, domainUrl) != null) {
-                            challengeLatch.countDown()
-                        }
+                        challengeLatch.countDown()
                     }
                 }
                 wv.loadUrl(url)
@@ -545,6 +589,7 @@ class KlikxxiTurnstileInterceptor(
 
         var attempts = 0
         while (attempts < MAX_ATTEMPTS && getCookieValue(url, domainUrl) == null) {
+            if (pageFinished && attempts >= 8) break
             Thread.sleep(POLL_INTERVAL_MS)
             cookieManager.flush()
             attempts++
