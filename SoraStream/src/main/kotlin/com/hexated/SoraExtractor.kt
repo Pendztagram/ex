@@ -241,9 +241,12 @@ object SoraExtractor : SoraStream() {
                 "https://vsembed.ru/embed/$it/${season}-${episode}"
             }
         }
+        val candidateUrls = listOfNotNull(imdbUrl, legacyUrl, vsembedUrl).distinct()
+
+        if (candidateUrls.any { loadVidsrcXpass(it, season != null, "$vidSrcAPI/", callback) }) return
 
         var emitted = false
-        listOfNotNull(imdbUrl, legacyUrl, vsembedUrl).distinct().forEach { embedUrl ->
+        candidateUrls.forEach { embedUrl ->
             loadExtractor(embedUrl, null, subtitleCallback) { link ->
                 emitted = true
                 callback.invoke(link)
@@ -251,7 +254,6 @@ object SoraExtractor : SoraStream() {
         }
 
         if (emitted) return
-        if (listOfNotNull(imdbUrl, legacyUrl, vsembedUrl).any { loadVidsrcXpass(it, false, null, callback) }) return
 
         val document = app.get(imdbUrl).document
         val playerIframe = document.selectFirst("iframe#player_iframe")?.attr("src")
@@ -287,6 +289,40 @@ object SoraExtractor : SoraStream() {
             }
         )
 
+    }
+
+    suspend fun invokeVidsrcme(
+        tmdbId: Int?,
+        season: Int?,
+        episode: Int?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+    ) {
+        val id = tmdbId ?: return
+        val embedUrl = if (season == null) {
+            "$vidsrcMeAPI/embed/movie/$id"
+        } else {
+            "$vidsrcMeAPI/embed/tv/$id/$season/$episode"
+        }
+
+        if (loadVidsrcXpass(embedUrl, season != null, "$vidsrcMeAPI/", callback)) return
+
+        var emitted = false
+        loadExtractor(embedUrl, "$vidsrcMeAPI/", subtitleCallback) { link ->
+            emitted = true
+            callback.invoke(link)
+        }
+
+        if (emitted) return
+
+        invokeWebviewEmbedSource(
+            "VidSrcMe",
+            embedUrl,
+            "$vidsrcMeAPI/",
+            vidsrcMeAPI,
+            callback,
+            useOkhttp = false
+        )
     }
 
     suspend fun invokeAzmovies(
@@ -600,11 +636,14 @@ object SoraExtractor : SoraStream() {
         referer: String,
         origin: String,
         callback: (ExtractorLink) -> Unit,
-    ) {
+        useOkhttp: Boolean = true,
+    ): Boolean {
+        var emitted = false
         val mediaRes = app.get(
             pageUrl,
             interceptor = WebViewResolver(
                 Regex("""https?://[^"'\\s]+?\.(?:m3u8|mp4)(?:\?[^"'\\s]*)?"""),
+                useOkhttp = useOkhttp,
                 timeout = 20_000L
             )
         )
@@ -613,25 +652,59 @@ object SoraExtractor : SoraStream() {
         val mediaType = when {
             mediaUrl.contains(".m3u8", ignoreCase = true) -> ExtractorLinkType.M3U8
             mediaUrl.contains(".mp4", ignoreCase = true) -> INFER_TYPE
-            else -> return
+            else -> null
         }
 
-        callback.invoke(
-            newExtractorLink(
-                sourceName,
-                sourceName,
-                mediaUrl,
-                mediaType
-            ) {
-                this.referer = referer
-                this.headers = mapOf(
-                    "Accept" to "*/*",
-                    "Referer" to referer,
-                    "Origin" to origin,
-                    "User-Agent" to USER_AGENT,
+        if (mediaType != null) {
+            emitted = true
+            callback.invoke(
+                newExtractorLink(
+                    sourceName,
+                    sourceName,
+                    mediaUrl,
+                    mediaType
+                ) {
+                    this.referer = referer
+                    this.headers = mapOf(
+                        "Accept" to "*/*",
+                        "Referer" to referer,
+                        "Origin" to origin,
+                        "User-Agent" to USER_AGENT,
+                    )
+                }
+            )
+            return true
+        }
+
+        extractPlayableUrlFromHtml(mediaRes.text, getBaseUrl(mediaRes.url))?.let { nestedUrl ->
+            val normalizedUrl = nestedUrl.fixUrlBloat()
+            if (normalizedUrl.contains(".m3u8", true) || normalizedUrl.contains(".mp4", true)) {
+                emitted = true
+                callback.invoke(
+                    newExtractorLink(
+                        sourceName,
+                        sourceName,
+                        normalizedUrl,
+                        if (normalizedUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else INFER_TYPE
+                    ) {
+                        this.referer = referer
+                        this.headers = mapOf(
+                            "Accept" to "*/*",
+                            "Referer" to referer,
+                            "Origin" to origin,
+                            "User-Agent" to USER_AGENT,
+                        )
+                    }
                 )
+            } else {
+                loadExtractor(normalizedUrl, referer, { _: SubtitleFile -> }) { link ->
+                    emitted = true
+                    callback.invoke(link)
+                }
             }
-        )
+        }
+
+        return emitted
     }
 
     suspend fun invokeMafiaEmbed(
@@ -711,24 +784,73 @@ object SoraExtractor : SoraStream() {
         } else {
             "$twoEmbedAPI/embed/tv/$tmdbId/$season/$episode"
         }
+        val fallbackCcUrl = if (season == null) {
+            "https://www.2embed.cc/embed/movie/$tmdbId"
+        } else {
+            "https://www.2embed.cc/embed/tv/$tmdbId/$season/$episode"
+        }
 
-        invokeWebviewEmbedSource(
+        if (invokeWebviewEmbedSource(
             "2Embed",
             url,
             "$twoEmbedAPI/",
             twoEmbedAPI,
             callback
-        )
+        )) {
+            return
+        }
+
+        val fallbackHtml = app.get(
+            fallbackCcUrl,
+            headers = mapOf("User-Agent" to USER_AGENT)
+        ).text
+
+        val xpsUrl = Regex("""https://streamsrcs\.2embed\.cc/xps(?:-tv)?\?[^'"\s<]+""", RegexOption.IGNORE_CASE)
+            .find(fallbackHtml)
+            ?.value
+
+        if (!xpsUrl.isNullOrBlank()) {
+            if (loadVidsrcXpass(xpsUrl, season != null, fallbackCcUrl, callback)) return
+
+            val xpsResponse = app.get(
+                xpsUrl,
+                referer = fallbackCcUrl,
+                headers = mapOf("User-Agent" to USER_AGENT)
+            )
+            extractPlayableUrlFromHtml(xpsResponse.text, getBaseUrl(xpsResponse.url))?.let { resolved ->
+                if (loadVidsrcXpass(resolved, season != null, xpsUrl, callback)) return
+            }
+        }
+
+        val nestedUrl = Regex("""<iframe[^>]+id=["']iframesrc["'][^>]+data-src=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+            .find(fallbackHtml)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.let { fixUrl(it, "https://www.2embed.cc") }
+
+        if (!nestedUrl.isNullOrBlank()) {
+            if (loadVidsrcXpass(nestedUrl, season != null, fallbackCcUrl, callback)) return
+            invokeWebviewEmbedSource(
+                "2Embed",
+                nestedUrl,
+                fallbackCcUrl,
+                getBaseUrl(nestedUrl),
+                callback,
+                useOkhttp = false
+            )
+        }
     }
 
     suspend fun invokeMultiEmbed(
+        tmdbId: Int?,
         imdbId: String?,
         season: Int?,
         episode: Int?,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
     ) {
-        if (imdbId.isNullOrBlank()) return
+        val videoIds = listOfNotNull(tmdbId?.toString(), imdbId).distinct()
+        if (videoIds.isEmpty()) return
 
         val userAgent =
             "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
@@ -737,47 +859,66 @@ object SoraExtractor : SoraStream() {
             "Referer" to multiEmbedAPI,
             "X-Requested-With" to "XMLHttpRequest",
         )
-        val baseUrl = buildString {
-            append("$multiEmbedAPI/?video_id=")
-            append(imdbId)
-            if (season != null && episode != null) append("&s=$season&e=$episode")
-        }
-        val resolvedUrl = app.get(baseUrl, headers = headers).url
-        val pageHtml = app.post(
-            resolvedUrl,
-            data = mapOf(
-                "button-click" to "ZEhKMVpTLVF0LVBTLVF0LVAtMGs1TFMtUXpPREF0TC0wLVYzTi0wVS1RTi0wQTFORGN6TmprLTU=",
-                "button-referer" to ""
-            ),
-            headers = headers
-        ).text
-        val token = Regex("""load_sources\("([^"]+)"\)""").find(pageHtml)?.groupValues?.get(1) ?: return
-        val sourcesHtml = app.post(
-            "https://streamingnow.mov/response.php",
-            data = mapOf("token" to token),
-            headers = headers
-        ).text
+        videoIds.forEach { videoId ->
+            val baseUrl = buildString {
+                append("$multiEmbedAPI/?video_id=")
+                append(videoId)
+                if (season != null && episode != null) append("&s=$season&e=$episode")
+            }
+            val resolvedUrl = app.get(baseUrl, headers = headers).url
+            if (
+                invokeWebviewEmbedSource(
+                    "MultiEmbed",
+                    resolvedUrl,
+                    "$multiEmbedAPI/",
+                    getBaseUrl(resolvedUrl),
+                    callback,
+                    useOkhttp = false
+                )
+            ) {
+                return
+            }
 
-        Jsoup.parse(sourcesHtml).select("li").amap { server ->
-            val serverId = server.attr("data-server")
-            val videoId = server.attr("data-id")
-            if (serverId.isBlank() || videoId.isBlank()) return@amap
+            val pageHtml = app.post(
+                resolvedUrl,
+                data = mapOf(
+                    "button-click" to "ZEhKMVpTLVF0LVBTLVF0LVAtMGs1TFMtUXpPREF0TC0wLVYzTi0wVS1RTi0wQTFORGN6TmprLTU=",
+                    "button-referer" to ""
+                ),
+                headers = headers
+            ).text
+            val token = Regex("""load_sources\("([^"]+)"\)""").find(pageHtml)?.groupValues?.get(1) ?: return@forEach
+            val sourcesHtml = app.post(
+                "https://streamingnow.mov/response.php",
+                data = mapOf("token" to token),
+                headers = headers
+            ).text
 
-            runCatching {
-                val playUrl = "https://streamingnow.mov/playvideo.php" +
-                    "?video_id=${videoId.substringBefore("=")}&server_id=$serverId&token=$token&init=1"
-                val playHtml = app.get(playUrl, headers = headers).text
-                val iframeUrl = Jsoup.parse(playHtml).selectFirst("iframe.source-frame.show")?.attr("src") ?: return@runCatching
-                val iframeHtml = app.get(iframeUrl, headers = headers).text
-                val fileUrl = Jsoup.parse(iframeHtml).selectFirst("iframe.source-frame.show")?.attr("src")
-                    ?: Regex("""file:"(https?://[^"]+)"""").find(iframeHtml)?.groupValues?.get(1)
-                    ?: return@runCatching
+            Jsoup.parse(sourcesHtml).select("li").amap { server ->
+                val serverId = server.attr("data-server")
+                val sourceVideoId = server.attr("data-id")
+                if (serverId.isBlank() || sourceVideoId.isBlank()) return@amap
 
-                when {
-                    fileUrl.contains(".m3u8", true) || fileUrl.contains(".json", true) ->
-                        M3u8Helper.generateM3u8("MultiEmbed", fileUrl, multiEmbedAPI).forEach(callback)
+                runCatching {
+                    val playUrl = "https://streamingnow.mov/playvideo.php" +
+                        "?video_id=${sourceVideoId.substringBefore("=")}&server_id=$serverId&token=$token&init=1"
+                    val playHtml = app.get(playUrl, headers = headers).text
+                    val iframeUrl = Jsoup.parse(playHtml).selectFirst("iframe.source-frame.show")?.attr("src")
+                        ?: return@runCatching
+                    val iframeHtml = app.get(iframeUrl, headers = headers).text
+                    val fileUrl = Jsoup.parse(iframeHtml).selectFirst("iframe.source-frame.show")?.attr("src")
+                        ?: Regex("""file:"(https?://[^"]+)"""").find(iframeHtml)?.groupValues?.get(1)
+                        ?: extractPlayableUrlFromHtml(iframeHtml, getBaseUrl(iframeUrl))
+                        ?: return@runCatching
 
-                    !fileUrl.contains("vidsrc", true) -> loadExtractor(fileUrl, multiEmbedAPI, subtitleCallback, callback)
+                    when {
+                        fileUrl.contains(".m3u8", true) || fileUrl.contains(".json", true) ->
+                            M3u8Helper.generateM3u8("MultiEmbed", fileUrl, multiEmbedAPI).forEach(callback)
+
+                        loadVidsrcXpass(fileUrl, season != null, multiEmbedAPI, callback) -> Unit
+
+                        !fileUrl.contains("vidsrc", true) -> loadExtractor(fileUrl, multiEmbedAPI, subtitleCallback, callback)
+                    }
                 }
             }
         }
@@ -955,12 +1096,24 @@ object SoraExtractor : SoraStream() {
             "$riveStreamAPI/embed/agg?type=$type&id=$id&season=$season&episode=$episode"
         }
 
-        invokeWebviewEmbedSource(
+        if (invokeWebviewEmbedSource(
             "RiveStream",
             aggUrl,
             "$riveStreamAPI/",
             riveStreamAPI,
-            callback
+            callback,
+            useOkhttp = false
+        )) {
+            return
+        }
+
+        invokeWebviewEmbedSource(
+            "RiveStream",
+            watchUrl,
+            "$riveStreamAPI/",
+            riveStreamAPI,
+            callback,
+            useOkhttp = false
         )
     }
 
@@ -1263,6 +1416,22 @@ object SoraExtractor : SoraStream() {
         if (generatedLinks.isEmpty()) return false
         generatedLinks.forEach(callback)
         return true
+    }
+
+    private fun extractPlayableUrlFromHtml(
+        html: String,
+        baseUrl: String,
+    ): String? {
+        val document = Jsoup.parse(html, baseUrl)
+        return listOfNotNull(
+            document.selectFirst("iframe.source-frame.show")?.attr("abs:src"),
+            document.selectFirst("iframe[data-src]")?.attr("abs:data-src"),
+            document.selectFirst("iframe[src]")?.attr("abs:src"),
+            document.selectFirst("source[src]")?.attr("abs:src"),
+            Regex("""file\s*:\s*"(https?://[^"]+)"""").find(html)?.groupValues?.getOrNull(1),
+            Regex("""["'](https?://[^"'\\s]+?\.(?:m3u8|mp4|json)(?:\?[^"'\\s]*)?)["']""")
+                .find(html)?.groupValues?.getOrNull(1),
+        ).firstOrNull { !it.isNullOrBlank() }
     }
 
     private suspend fun requestAzMoviesPage(url: String): NiceResponse {

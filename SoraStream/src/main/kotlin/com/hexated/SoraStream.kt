@@ -7,6 +7,7 @@ import com.hexated.SoraExtractor.invokeIdlix
 import com.hexated.SoraExtractor.invokeVidfast
 import com.hexated.SoraExtractor.invokeVidlink
 import com.hexated.SoraExtractor.invokeVidsrc
+import com.hexated.SoraExtractor.invokeVidsrcme
 import com.hexated.SoraExtractor.invokeVidsrccc
 import com.hexated.SoraExtractor.invokeVixsrc
 import com.hexated.SoraExtractor.invokeWatchsomuch
@@ -86,6 +87,7 @@ open class SoraStream(val sharedPref: SharedPreferences? = null) : TmdbProvider(
         const val noxxAPI = "https://noxx.to"
         const val vidsrcccAPI = "https://vidsrc.cc"
         const val vidSrcAPI = "https://vidsrc.net"
+        const val vidsrcMeAPI = "https://vidsrcme.ru"
         const val watchSomuchAPI = "https://watchsomuch.tv"
         const val vidlinkAPI = "https://vidlink.pro"
         const val vidfastAPI = "https://vidfast.pro"
@@ -124,6 +126,7 @@ open class SoraStream(val sharedPref: SharedPreferences? = null) : TmdbProvider(
         val sourceRegistry = listOf(
             SourceDescriptor("vidsrccc", SourceGroup.CORE, 10),
             SourceDescriptor("vidsrc", SourceGroup.CORE, 20),
+            SourceDescriptor("vidsrcme", SourceGroup.CORE, 25),
             SourceDescriptor("vidlink", SourceGroup.CORE, 30),
             SourceDescriptor("vidfast", SourceGroup.CORE, 40),
             SourceDescriptor("vixsrc", SourceGroup.EMBED, 50),
@@ -469,6 +472,14 @@ open class SoraStream(val sharedPref: SharedPreferences? = null) : TmdbProvider(
                 callback
             )
 
+            "vidsrcme" -> invokeVidsrcme(
+                res.id,
+                res.season,
+                res.episode,
+                subtitleCallback,
+                callback
+            )
+
             "vixsrc" -> invokeVixsrc(res.id, res.season, res.episode, callback)
             "vidlink" -> invokeVidlink(res.id, res.season, res.episode, callback)
             "vidfast" -> invokeVidfast(res.id, res.season, res.episode, subtitleCallback, callback)
@@ -477,7 +488,14 @@ open class SoraStream(val sharedPref: SharedPreferences? = null) : TmdbProvider(
             "autoembed" -> invokeAutoEmbed(res.id, res.season, res.episode, subtitleCallback, callback)
             "2embed" -> invoke2Embed(res.id, res.season, res.episode, callback)
             "vidsrcmov" -> invokeVidsrcMov(res.id, res.imdbId, res.season, res.episode, callback)
-            "multiembed" -> invokeMultiEmbed(res.imdbId, res.season, res.episode, subtitleCallback, callback)
+            "multiembed" -> invokeMultiEmbed(
+                res.id,
+                res.imdbId,
+                res.season,
+                res.episode,
+                subtitleCallback,
+                callback
+            )
             "ninetv" -> invokeNinetv(res.id, res.season, res.episode, subtitleCallback, callback)
             "ridomovies" -> invokeRidomovies(res.id, res.imdbId, res.season, res.episode, subtitleCallback, callback)
             "soapy" -> invokeSoapy(res.id, res.season, res.episode, subtitleCallback, callback)
