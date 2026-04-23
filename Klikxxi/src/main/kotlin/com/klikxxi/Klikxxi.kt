@@ -23,6 +23,7 @@ import okhttp3.Interceptor
 import okhttp3.Response
 import org.jsoup.nodes.Element
 import java.net.URI
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -476,9 +477,10 @@ class KlikxxiTurnstileInterceptor(
     private val targetCookies: List<String> = listOf("cf_clearance", "__cf_bm")
 ) : Interceptor {
     companion object {
-        private const val POLL_INTERVAL_MS = 250L
-        private const val MAX_ATTEMPTS = 32
-        private const val PAGE_WAIT_SECONDS = 12L
+        private const val POLL_INTERVAL_MS = 500L
+        private const val MAX_ATTEMPTS = 60
+        private const val PAGE_WAIT_SECONDS = 30L
+        private val clearanceCache = ConcurrentHashMap<String, Long>()
     }
 
     private fun getCookieHeader(url: String, domainUrl: String): String {
@@ -530,21 +532,35 @@ class KlikxxiTurnstileInterceptor(
         return challengeHints.any { preview.contains(it, ignoreCase = true) }
     }
 
+    private fun hasFreshClearance(url: String, domainUrl: String): Boolean {
+        val hasCookie = getCookieValue(url, domainUrl) != null
+        if (!hasCookie) {
+            clearanceCache.remove(domainUrl)
+            return false
+        }
+        val lastSolved = clearanceCache[domainUrl] ?: return true
+        return System.currentTimeMillis() - lastSolved < TimeUnit.MINUTES.toMillis(20)
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun intercept(chain: Interceptor.Chain): Response {
         val originalRequest = chain.request()
         val url = originalRequest.url.toString()
         val domainUrl = "${originalRequest.url.scheme}://${originalRequest.url.host}"
         val cookieManager = CookieManager.getInstance()
-        if (getCookieValue(url, domainUrl) != null) {
+        if (hasFreshClearance(url, domainUrl)) {
             val response = chain.proceed(
                 originalRequest.newBuilder()
                     .header("Cookie", getCookieHeader(url, domainUrl))
                     .build()
             )
-            if (!hasChallenge(response)) return response
+            if (!hasChallenge(response)) {
+                clearanceCache[domainUrl] = System.currentTimeMillis()
+                return response
+            }
             response.close()
             invalidateCookie(domainUrl)
+            clearanceCache.remove(domainUrl)
         }
 
         val context = AcraApplication.context
@@ -554,7 +570,6 @@ class KlikxxiTurnstileInterceptor(
         var webView: WebView? = null
         var resolvedUserAgent = originalRequest.header("User-Agent") ?: ""
         val challengeLatch = CountDownLatch(1)
-        var pageFinished = false
 
         handler.post {
             try {
@@ -573,9 +588,11 @@ class KlikxxiTurnstileInterceptor(
                 wv.webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView, finishedUrl: String) {
                         super.onPageFinished(view, finishedUrl)
-                        pageFinished = true
                         cookieManager.flush()
-                        challengeLatch.countDown()
+                        if (getCookieValue(finishedUrl, domainUrl) != null) {
+                            clearanceCache[domainUrl] = System.currentTimeMillis()
+                            challengeLatch.countDown()
+                        }
                     }
                 }
                 wv.loadUrl(url)
@@ -589,10 +606,13 @@ class KlikxxiTurnstileInterceptor(
 
         var attempts = 0
         while (attempts < MAX_ATTEMPTS && getCookieValue(url, domainUrl) == null) {
-            if (pageFinished && attempts >= 8) break
             Thread.sleep(POLL_INTERVAL_MS)
             cookieManager.flush()
             attempts++
+        }
+
+        if (getCookieValue(url, domainUrl) != null) {
+            clearanceCache[domainUrl] = System.currentTimeMillis()
         }
 
         handler.post {
@@ -616,8 +636,12 @@ class KlikxxiTurnstileInterceptor(
                 .build()
         )
 
-        if (!hasChallenge(finalResponse)) return finalResponse
+        if (!hasChallenge(finalResponse)) {
+            clearanceCache[domainUrl] = System.currentTimeMillis()
+            return finalResponse
+        }
 
+        clearanceCache.remove(domainUrl)
         return finalResponse
     }
 }
