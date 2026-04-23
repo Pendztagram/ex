@@ -21,8 +21,8 @@ buildscript {
 
     dependencies {
         classpath("com.android.tools.build:gradle:8.13.2")
-        // Use the JitPack snapshot published from the repo's master branch.
-        classpath("com.github.recloudstream:gradle:master-SNAPSHOT")
+        // JitPack now publishes this plugin under the generic snapshot coordinate.
+        classpath("com.github.recloudstream:gradle:-SNAPSHOT")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.3.0")
     }
 }
