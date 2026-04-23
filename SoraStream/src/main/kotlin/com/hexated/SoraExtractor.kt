@@ -1035,6 +1035,68 @@ object SoraExtractor : SoraStream() {
     ) {
         val id = tmdbId ?: return
         val type = if (season == null) "movie" else "tv"
+        val headers = mapOf("User-Agent" to USER_AGENT)
+
+        suspend fun <T> riveRequest(block: suspend () -> T): T? {
+            repeat(2) {
+                runCatching { block() }.getOrNull()?.let { return it }
+            }
+            return runCatching { block() }.getOrNull()
+        }
+
+        val sourceList = riveRequest {
+            app.get(
+                "$riveStreamAPI/api/backendfetch?requestID=VideoProviderServices&secretKey=rive",
+                headers = headers
+            ).parsedSafe<RiveStreamSource>()
+        }
+
+        val secretKey = riveRequest {
+            val homeDoc = app.get(riveStreamAPI, headers = headers, timeout = 20).document
+            val appScript = homeDoc.select("script")
+                .firstOrNull { it.attr("src").contains("_app") }
+                ?.attr("src")
+                ?.takeIf { it.isNotBlank() }
+                ?: return@riveRequest null
+            val js = app.get(fixUrl(appScript, riveStreamAPI), headers = headers, timeout = 20).text
+            val keyList = Regex("""let\s+c\s*=\s*(\[[^]]*])""")
+                .find(js)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.let { array ->
+                    Regex("\"([^\"]+)\"").findAll(array).map { it.groupValues[1] }.toList()
+                }
+                .orEmpty()
+            if (keyList.isEmpty()) return@riveRequest null
+            app.get(
+                "https://rivestream.supe2372.workers.dev/?input=$id&cList=${keyList.joinToString(",")}"
+            ).text.trim().takeIf { it.isNotBlank() }
+        }
+
+        var emitted = false
+        if (!secretKey.isNullOrBlank()) {
+            sourceList?.data?.distinct()?.amap { service ->
+                val streamUrl = if (season == null) {
+                    "$riveStreamAPI/api/backendfetch?requestID=movieVideoProvider&id=$id&service=$service&secretKey=$secretKey"
+                } else {
+                    "$riveStreamAPI/api/backendfetch?requestID=tvVideoProvider&id=$id&season=$season&episode=$episode&service=$service&secretKey=$secretKey"
+                }
+
+                val response = riveRequest {
+                    app.get(streamUrl, headers = headers, timeout = 10).parsedSafe<RiveStreamResponse>()
+                } ?: return@amap
+
+                response.data?.sources?.forEach { source ->
+                    parseRiveStreamSource(source)?.let { link ->
+                        emitted = true
+                        callback(link)
+                    }
+                }
+            }
+        }
+
+        if (emitted) return
+
         val watchUrl = if (season == null) {
             "$riveStreamAPI/watch?type=$type&id=$id"
         } else {
@@ -1576,6 +1638,61 @@ object SoraExtractor : SoraStream() {
     }
 
     private fun String.urlEncodeCompat(): String = URLEncoder.encode(this, "UTF-8")
+
+    private suspend fun parseRiveStreamSource(source: RiveStreamVideo): ExtractorLink? {
+        val rawUrl = source.url?.takeIf { it.isNotBlank() } ?: return null
+        val baseName = source.source?.takeIf { it.isNotBlank() } ?: "Source"
+        val qualityLabel = source.quality?.takeIf { it.isNotBlank() }
+        val label = buildString {
+            append("RiveStream ")
+            append(baseName)
+            if (!qualityLabel.isNullOrBlank() && !baseName.contains("AsiaCloud", true)) {
+                append(" [")
+                append(qualityLabel)
+                append("]")
+            }
+        }
+
+        if (rawUrl.contains("proxy?url=")) {
+            val decoded = URLDecoder.decode(rawUrl, "UTF-8")
+            val encodedUrl = decoded.substringAfter("proxy?url=", "").substringBefore("&headers=")
+            if (encodedUrl.isBlank()) return null
+            val mediaUrl = URLDecoder.decode(encodedUrl, "UTF-8")
+            val headerPayload = decoded.substringAfter("&headers=", "")
+            val headerJson = runCatching { URLDecoder.decode(headerPayload, "UTF-8") }.getOrDefault("")
+            val headerMap = runCatching {
+                JSONObject(headerJson).let { json ->
+                    json.keys().asSequence().associateWith { json.getString(it) }
+                }
+            }.getOrDefault(emptyMap())
+            val referer = headerMap["Referer"].orEmpty()
+            val origin = headerMap["Origin"].orEmpty()
+
+            return newExtractorLink(
+                label,
+                label,
+                mediaUrl,
+                if (mediaUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else INFER_TYPE
+            ) {
+                this.quality = Qualities.P1080.value
+                this.referer = referer
+                this.headers = buildMap {
+                    if (referer.isNotBlank()) put("Referer", referer)
+                    if (origin.isNotBlank()) put("Origin", origin)
+                    put("User-Agent", USER_AGENT)
+                }
+            }
+        }
+
+        return newExtractorLink(
+            "$label (VLC)",
+            "$label (VLC)",
+            rawUrl,
+            if (rawUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else INFER_TYPE
+        ) {
+            this.quality = Qualities.P1080.value
+        }
+    }
 
     private data class SearchMatchCandidate(
         val url: String,

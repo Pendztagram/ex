@@ -74,6 +74,25 @@ data class VidsrcccSubtitles(
     @JsonProperty("file") val file: String? = null,
 )
 
+data class RiveStreamSource(
+    @JsonProperty("data") val data: ArrayList<String>? = arrayListOf(),
+)
+
+data class RiveStreamResponse(
+    @JsonProperty("data") val data: RiveStreamData? = null,
+)
+
+data class RiveStreamData(
+    @JsonProperty("sources") val sources: ArrayList<RiveStreamVideo>? = arrayListOf(),
+)
+
+data class RiveStreamVideo(
+    @JsonProperty("quality") val quality: String? = null,
+    @JsonProperty("source") val source: String? = null,
+    @JsonProperty("url") val url: String? = null,
+    @JsonProperty("format") val format: String? = null,
+)
+
 data class UpcloudSources(
     @JsonProperty("file") val file: String? = null,
 )
