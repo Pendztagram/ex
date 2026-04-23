@@ -78,7 +78,7 @@ class AnimeSailProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = request(request.data + page).document
-        val home = document.select("article").map {
+        val home = document.select("div.listupd article, article").mapNotNull {
             it.toSearchResult()
         }
         return newHomePageResponse(request.name, home)
@@ -102,19 +102,49 @@ class AnimeSailProvider : MainAPI() {
         }
     }
 
-    private fun Element.toSearchResult(): AnimeSearchResponse {
-        val rawHref = fixUrlNull(this.selectFirst("a")?.attr("href")).toString()
+    private fun Element.toSearchResult(): AnimeSearchResponse? {
+        val linkElement = selectFirst(
+            ".tt > h2 > a, h2.entry-title > a, h2 > a, h3 > a, a[rel=bookmark], a[href]"
+        ) ?: return null
+
+        val rawHref = fixUrlNull(
+            linkElement.attr("href").ifBlank {
+                selectFirst("a[href]")?.attr("href")
+            }
+        ) ?: return null
         val href = getProperAnimeLink(rawHref)
-        val rawTitle = this.selectFirst(".tt > h2")?.text() ?: ""
+
+        val rawTitle = listOfNotNull(
+            selectFirst(".tt > h2")?.text(),
+            selectFirst("h2.entry-title")?.text(),
+            selectFirst("h2")?.text(),
+            selectFirst("h3")?.text(),
+            linkElement.attr("title").takeIf { it.isNotBlank() },
+            select("a[href]")
+                .map { it.text().trim() }
+                .filter { it.isNotBlank() && !it.equals("Next", true) && !it.equals("Previous", true) }
+                .maxByOrNull { it.length }
+        ).firstOrNull { !it.isNullOrBlank() }.orEmpty()
+
         val title = rawTitle.replace(Regex("(?i)Episode\\s?\\d+"), "")
             .replace(Regex("(?i)Subtitle Indonesia"), "")
             .replace(Regex("(?i)Sub Indo"), "")
             .trim()
             .removeSuffix("-")
             .trim()
-        val posterUrl = fixUrlNull(this.selectFirst("div.limit img")?.attr("src"))
+
+        if (title.isBlank()) return null
+
+        val posterUrl = fixUrlNull(
+            this.selectFirst("div.limit img, img.wp-post-image, img.attachment-post-thumbnail, img")
+                ?.attr("src")
+        )
         val epNum = Regex("(?i)Episode\\s?(\\d+)").find(rawTitle)?.groupValues?.getOrNull(1)?.toIntOrNull()
-        val typeText = this.selectFirst(".tt > span")?.text() ?: ""
+        val typeText = listOfNotNull(
+            this.selectFirst(".tt > span")?.text(),
+            this.selectFirst(".typez")?.text(),
+            this.text().takeIf { it.contains("·") }
+        ).joinToString(" ")
         val type = if (typeText.contains("Movie", ignoreCase = true)) TvType.AnimeMovie else TvType.Anime
         return newAnimeSearchResponse(title, href, type) {
             this.posterUrl = posterUrl
@@ -127,7 +157,7 @@ class AnimeSailProvider : MainAPI() {
         val link = "$mainUrl/?s=$query"
         val document = request(link).document
 
-        return document.select("div.listupd article").map {
+        return document.select("div.listupd article, article").mapNotNull {
             it.toSearchResult()
         }
     }

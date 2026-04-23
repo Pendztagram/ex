@@ -100,13 +100,32 @@ class Klikxxi : MainAPI() {
        ======================= */
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val linkElement = selectFirst("a[href][title]") ?: return null
+        val linkElement = selectFirst(
+            "h2.entry-title > a, h3.entry-title > a, h2 > a, h3 > a, a[rel=bookmark], a[href][title], a[href]"
+        ) ?: return null
 
         val href = fixUrl(linkElement.attr("href").ifBlank {
             selectFirst("a")?.attr("href") ?: return null
         })
 
-        val rawTitle = linkElement.attr("title")
+        val rawTitle = listOfNotNull(
+            selectFirst("h2.entry-title")?.text(),
+            selectFirst("h3.entry-title")?.text(),
+            selectFirst("h2")?.text(),
+            selectFirst("h3")?.text(),
+            linkElement.attr("title").takeIf { it.isNotBlank() },
+            select("a[href]")
+                .map { it.text().trim() }
+                .filter {
+                    it.isNotBlank() &&
+                        !it.equals("Watch Movie", true) &&
+                        !it.equals("Trailer", true) &&
+                        !it.equals("Next", true) &&
+                        !it.equals("Previous", true)
+                }
+                .maxByOrNull { it.length }
+        ).firstOrNull { !it.isNullOrBlank() }.orEmpty()
+
         val title = rawTitle
             .removePrefix("Permalink to: ")
             .ifBlank { linkElement.text() }
@@ -142,9 +161,16 @@ class Klikxxi : MainAPI() {
     }
 }
 
-        val typeText = selectFirst(".gmr-posttype-item")?.text()?.trim()
+        val typeText = listOfNotNull(
+            selectFirst(".gmr-posttype-item")?.text()?.trim(),
+            selectFirst(".gmr-numbeps, .mli-eps")?.text()?.trim(),
+            text().takeIf { it.contains("TV Show", true) || it.contains("Eps", true) || it.contains("Episode", true) }
+        ).joinToString(" ")
         val ratingText = this.selectFirst("div.gmr-rating-item")?.ownText()?.trim()
-        val isSeries = typeText.equals("TV Show", ignoreCase = true)
+        val isSeries = typeText.equals("TV Show", ignoreCase = true) ||
+            typeText.contains("Eps", true) ||
+            typeText.contains("Episode", true) ||
+            href.contains("/tv/", true)
 
         return if (isSeries) {
             newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
@@ -395,26 +421,55 @@ class Klikxxi : MainAPI() {
     }
 }
 
-class KlikxxiTurnstileInterceptor(private val targetCookie: String = "cf_clearance") : Interceptor {
+class KlikxxiTurnstileInterceptor(
+    private val targetCookies: List<String> = listOf("cf_clearance", "__cf_bm")
+) : Interceptor {
     companion object {
         private const val POLL_INTERVAL_MS = 500L
-        private const val MAX_ATTEMPTS = 30
+        private const val MAX_ATTEMPTS = 60
     }
 
     private fun getCookieValue(domainUrl: String): String? {
         val raw = CookieManager.getInstance().getCookie(domainUrl) ?: return null
         return raw.split(";")
             .map { it.trim() }
-            .firstOrNull { it.startsWith("$targetCookie=") }
-            ?.substringAfter("=")
-            ?.takeIf { it.isNotBlank() }
+            .firstNotNullOfOrNull { cookie ->
+                targetCookies.firstOrNull { target -> cookie.startsWith("$target=") }
+                    ?.let { cookie.substringAfter("=") }
+                    ?.takeIf { it.isNotBlank() }
+            }
     }
 
     private fun invalidateCookie(domainUrl: String) {
         CookieManager.getInstance().apply {
-            setCookie(domainUrl, "$targetCookie=; Max-Age=0")
+            targetCookies.forEach { cookie ->
+                setCookie(domainUrl, "$cookie=; Max-Age=0")
+            }
             flush()
         }
+    }
+
+    private fun hasChallenge(response: Response): Boolean {
+        if (response.code == 403 || response.code == 429 || response.code == 503) return true
+
+        val contentType = response.header("Content-Type").orEmpty()
+        if (!contentType.contains("text/html", ignoreCase = true)) return false
+
+        val preview = runCatching { response.peekBody(128 * 1024).string() }.getOrDefault("")
+        if (preview.isBlank()) return false
+
+        val challengeHints = listOf(
+            "cf-challenge",
+            "cf-browser-verification",
+            "cf_clearance",
+            "challenge-platform",
+            "Performing security verification",
+            "Verifying you are human",
+            "Just a moment",
+            "Attention Required",
+            "/cdn-cgi/challenge-platform/"
+        )
+        return challengeHints.any { preview.contains(it, ignoreCase = true) }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -429,7 +484,7 @@ class KlikxxiTurnstileInterceptor(private val targetCookie: String = "cf_clearan
                     .header("Cookie", cookieManager.getCookie(domainUrl) ?: "")
                     .build()
             )
-            if (response.code != 403 && response.code != 503) return response
+            if (!hasChallenge(response)) return response
             response.close()
             invalidateCookie(domainUrl)
         }
@@ -481,11 +536,15 @@ class KlikxxiTurnstileInterceptor(private val targetCookie: String = "cf_clearan
         }
 
         val finalCookies = cookieManager.getCookie(domainUrl) ?: ""
-        return chain.proceed(
+        val finalResponse = chain.proceed(
             originalRequest.newBuilder()
                 .header("Cookie", finalCookies)
                 .apply { if (resolvedUserAgent.isNotBlank()) header("User-Agent", resolvedUserAgent) }
                 .build()
         )
+
+        if (!hasChallenge(finalResponse)) return finalResponse
+
+        return finalResponse
     }
 }
