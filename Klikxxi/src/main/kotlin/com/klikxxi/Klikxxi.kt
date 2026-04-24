@@ -49,6 +49,11 @@ class Klikxxi : MainAPI() {
     override val supportedTypes =
         setOf(TvType.Movie, TvType.TvSeries, TvType.Anime, TvType.AsianDrama)
 
+    private companion object {
+        // Opening list pages can be slow due to Cloudflare and heavy HTML; increase just for list/search.
+        const val LIST_TIMEOUT_SECONDS = 240L
+    }
+
     // Use CloudflareKiller here to avoid blocking main-page loads with a WebView flow.
     private val cloudflareInterceptor by lazy { CloudflareKiller() }
     private val defaultHeaders = mapOf(
@@ -56,12 +61,13 @@ class Klikxxi : MainAPI() {
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36"
     )
 
-    private suspend fun request(url: String, ref: String? = null): NiceResponse {
+    private suspend fun request(url: String, ref: String? = null, timeoutSeconds: Long? = null): NiceResponse {
         val response = app.get(
             url,
             interceptor = cloudflareInterceptor,
             headers = defaultHeaders,
-            referer = ref
+            referer = ref,
+            timeout = timeoutSeconds
         )
         updateCfCookieHeader(response.cookies)
         return response
@@ -77,7 +83,8 @@ class Klikxxi : MainAPI() {
             interceptor = cloudflareInterceptor,
             headers = defaultHeaders,
             referer = ref,
-            data = data
+            data = data,
+            timeout = LIST_TIMEOUT_SECONDS
         )
         updateCfCookieHeader(response.cookies)
         return response
@@ -106,7 +113,7 @@ class Klikxxi : MainAPI() {
     }.replace("//", "/")
      .replace(":/", "://")
 
-    val document = request(url).document
+    val document = request(url, timeoutSeconds = LIST_TIMEOUT_SECONDS).document
 
     val items = document.select(
         "article.has-post-thumbnail, article.item, article.item-infinite, div.latestMovie article, div.latestSeri article"
@@ -211,7 +218,7 @@ class Klikxxi : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val document = request("$mainUrl/?s=$query").document
+        val document = request("$mainUrl/?s=$query", timeoutSeconds = LIST_TIMEOUT_SECONDS).document
         return document.select("article.item, article.has-post-thumbnail, article.item-infinite")
             .mapNotNull { it.toSearchResult() }
     }
