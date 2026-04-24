@@ -456,10 +456,10 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://kisskh.ovh&size=%size%",
-        "fileHash": "sha256-79efc41127c0c4b884950a5294a5ef48d8473b980b71e851c5693f980b1aafe2",
+        "fileHash": "sha256-2f2d29860d6eff62ee01f123d2d0433e6d8ec18797af7c1696255c1c8284e007",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 28416,
+        "fileSize": 30554,
         "status": 1,
         "language": "id",
         "authors": [
@@ -911,10 +911,10 @@
     },
     {
         "iconUrl": "https://github.com/duro92/ExtCloud/blob/main/SoraStream/Icon.png",
-        "fileHash": "sha256-11ed6184cfc437bd0465d8c7d3c9ea1e80249caa4fc075531ff45d44bf9a9316",
+        "fileHash": "sha256-7ec1b0640cb30cf7bfb481f335fecbd4833dfb2af31170444899f69d28afe5e8",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 212455,
+        "fileSize": 214007,
         "status": 1,
         "language": "en",
         "authors": [
