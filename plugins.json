@@ -501,10 +501,10 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://klikxxi.fit&size=%size%",
-        "fileHash": "sha256-43c367ce77b827f7fa1400b05a358876137d60f70206af2439bc99c651f062a8",
+        "fileHash": "sha256-bec36facf91796322298e215952f304ef559d7581906f0d32bc79609016e4fc2",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 30581,
+        "fileSize": 30963,
         "status": 1,
         "language": "id",
         "authors": [
