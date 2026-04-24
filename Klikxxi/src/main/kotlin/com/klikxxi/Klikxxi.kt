@@ -34,6 +34,10 @@ class Klikxxi : MainAPI() {
         var context: android.content.Context? = null
         @Volatile private var cfCookieHeader: String? = null
 
+        // Opening list pages can be slow due to Cloudflare and heavy HTML.
+        const val LIST_TIMEOUT_SECONDS = 240L
+        const val DEFAULT_TIMEOUT_SECONDS = 120L
+
         private fun updateCfCookieHeader(cookies: Map<String, String>) {
             if (cookies.isEmpty()) return
             val filtered = cookies.filterKeys { it == "cf_clearance" || it == "__cf_bm" }
@@ -49,11 +53,6 @@ class Klikxxi : MainAPI() {
     override val supportedTypes =
         setOf(TvType.Movie, TvType.TvSeries, TvType.Anime, TvType.AsianDrama)
 
-    private companion object {
-        // Opening list pages can be slow due to Cloudflare and heavy HTML; increase just for list/search.
-        const val LIST_TIMEOUT_SECONDS = 240L
-    }
-
     // Use CloudflareKiller here to avoid blocking main-page loads with a WebView flow.
     private val cloudflareInterceptor by lazy { CloudflareKiller() }
     private val defaultHeaders = mapOf(
@@ -61,7 +60,11 @@ class Klikxxi : MainAPI() {
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36"
     )
 
-    private suspend fun request(url: String, ref: String? = null, timeoutSeconds: Long? = null): NiceResponse {
+    private suspend fun request(
+        url: String,
+        ref: String? = null,
+        timeoutSeconds: Long = DEFAULT_TIMEOUT_SECONDS
+    ): NiceResponse {
         val response = app.get(
             url,
             interceptor = cloudflareInterceptor,
@@ -76,7 +79,8 @@ class Klikxxi : MainAPI() {
     private suspend fun requestPost(
         url: String,
         data: Map<String, String>,
-        ref: String? = null
+        ref: String? = null,
+        timeoutSeconds: Long = DEFAULT_TIMEOUT_SECONDS
     ): NiceResponse {
         val response = app.post(
             url,
@@ -84,7 +88,7 @@ class Klikxxi : MainAPI() {
             headers = defaultHeaders,
             referer = ref,
             data = data,
-            timeout = LIST_TIMEOUT_SECONDS
+            timeout = timeoutSeconds
         )
         updateCfCookieHeader(response.cookies)
         return response
