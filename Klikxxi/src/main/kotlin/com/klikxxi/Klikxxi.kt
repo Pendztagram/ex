@@ -436,7 +436,7 @@ class Klikxxi : MainAPI() {
         }
     )
     if (!bestSrcset.isNullOrBlank()) {
-        return fixUrl(bestSrcset.fixImageQuality())
+        return normalizePosterUrl(fixUrl(bestSrcset.fixImageQuality()))
     }
 
     // Prioritas 2: data-src atau data-lazy
@@ -455,12 +455,12 @@ class Klikxxi : MainAPI() {
             !it.contains("placeholder", true) &&
             !it.endsWith(".svg", true)
     }
-    if (!dataSrc.isNullOrBlank()) return fixUrl(dataSrc.fixImageQuality())
+    if (!dataSrc.isNullOrBlank()) return normalizePosterUrl(fixUrl(dataSrc.fixImageQuality()))
 
     // Prioritas 3: src biasa
     val src = this.attr("src")
     if (!src.isNullOrBlank() && !src.startsWith("data:", true) && !src.endsWith(".svg", true)) {
-        return fixUrl(src.fixImageQuality())
+        return normalizePosterUrl(fixUrl(src.fixImageQuality()))
     }
 
     return null
@@ -485,6 +485,20 @@ class Klikxxi : MainAPI() {
             put("Referer", mainUrl)
             if (userAgent.isNotBlank()) put("User-Agent", userAgent)
         }
+    }
+
+    private fun normalizePosterUrl(url: String): String {
+        val fixed = url.replace("&amp;", "&").trim()
+        val uri = runCatching { URI(fixed) }.getOrNull() ?: return fixed
+        val mainHost = runCatching { URI(mainUrl).host }.getOrNull()
+        val rawPath = uri.rawPath.orEmpty()
+
+        // Posters on the origin host are often protected; proxy common WordPress upload paths via i0.wp.com.
+        if (!mainHost.isNullOrBlank() && uri.host == mainHost && rawPath.contains("/wp-content/uploads/", true)) {
+            return "https://i0.wp.com/${uri.host}$rawPath"
+        }
+
+        return fixed
     }
 
     /** Base URL dari sebuah URL (scheme + host) */
