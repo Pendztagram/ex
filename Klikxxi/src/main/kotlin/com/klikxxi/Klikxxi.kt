@@ -32,6 +32,14 @@ import java.util.concurrent.TimeUnit
 class Klikxxi : MainAPI() {
     companion object {
         var context: android.content.Context? = null
+        @Volatile private var cfCookieHeader: String? = null
+
+        private fun updateCfCookieHeader(cookies: Map<String, String>) {
+            if (cookies.isEmpty()) return
+            val filtered = cookies.filterKeys { it == "cf_clearance" || it == "__cf_bm" }
+            if (filtered.isEmpty()) return
+            cfCookieHeader = filtered.entries.joinToString("; ") { (k, v) -> "$k=$v" }
+        }
     }
     override var mainUrl = "https://klikxxi.me"
     override var name = "Klikxxi🎭"
@@ -49,12 +57,14 @@ class Klikxxi : MainAPI() {
     )
 
     private suspend fun request(url: String, ref: String? = null): NiceResponse {
-        return app.get(
+        val response = app.get(
             url,
             interceptor = cloudflareInterceptor,
             headers = defaultHeaders,
             referer = ref
         )
+        updateCfCookieHeader(response.cookies)
+        return response
     }
 
     private suspend fun requestPost(
@@ -62,13 +72,15 @@ class Klikxxi : MainAPI() {
         data: Map<String, String>,
         ref: String? = null
     ): NiceResponse {
-        return app.post(
+        val response = app.post(
             url,
             interceptor = cloudflareInterceptor,
             headers = defaultHeaders,
             referer = ref,
             data = data
         )
+        updateCfCookieHeader(response.cookies)
+        return response
     }
     
 
@@ -481,24 +493,16 @@ class Klikxxi : MainAPI() {
 
     private fun posterHeaders(): Map<String, String> {
         val userAgent = defaultHeaders["User-Agent"].orEmpty()
+        val cookie = cfCookieHeader.orEmpty()
         return buildMap {
             put("Referer", mainUrl)
             if (userAgent.isNotBlank()) put("User-Agent", userAgent)
+            if (cookie.isNotBlank()) put("Cookie", cookie)
         }
     }
 
     private fun normalizePosterUrl(url: String): String {
-        val fixed = url.replace("&amp;", "&").trim()
-        val uri = runCatching { URI(fixed) }.getOrNull() ?: return fixed
-        val mainHost = runCatching { URI(mainUrl).host }.getOrNull()
-        val rawPath = uri.rawPath.orEmpty()
-
-        // Posters on the origin host are often protected; proxy common WordPress upload paths via i0.wp.com.
-        if (!mainHost.isNullOrBlank() && uri.host == mainHost && rawPath.contains("/wp-content/uploads/", true)) {
-            return "https://i0.wp.com/${uri.host}$rawPath"
-        }
-
-        return fixed
+        return url.replace("&amp;", "&").trim()
     }
 
     /** Base URL dari sebuah URL (scheme + host) */
