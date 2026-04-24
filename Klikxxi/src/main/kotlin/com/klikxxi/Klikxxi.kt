@@ -15,6 +15,7 @@ import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.mainPageOf
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.httpsify
 import com.lagradost.cloudstream3.utils.loadExtractor
@@ -40,9 +41,8 @@ class Klikxxi : MainAPI() {
     override val supportedTypes =
         setOf(TvType.Movie, TvType.TvSeries, TvType.Anime, TvType.AsianDrama)
 
-    // Cloudflare protection on Klikxxi often requires a clearance cookie.
-    // Use the local WebView-based interceptor to obtain and attach the cookie.
-    private val cloudflareInterceptor by lazy { KlikxxiTurnstileInterceptor() }
+    // Use CloudflareKiller here to avoid blocking main-page loads with a WebView flow.
+    private val cloudflareInterceptor by lazy { CloudflareKiller() }
     private val defaultHeaders = mapOf(
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36"
