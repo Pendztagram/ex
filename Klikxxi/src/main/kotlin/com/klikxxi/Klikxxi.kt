@@ -145,6 +145,7 @@ class Klikxxi : MainAPI() {
         // Poster – support src, srcset, data-lazy-src, dll + ambil resolusi terbesar
         val posterElement = this.selectFirst("img.wp-post-image, img.attachment-large, img")
         val posterUrl = posterElement?.fixPoster()?.let { fixUrl(it) }
+        val posterHeaders = posterUrl?.let(::posterHeaders)
 
         val quality = this.selectFirst(".gmr-quality-item")?.let { el ->
     // 1. Check if text directly available: <div class="gmr-quality-item">HD</div>
@@ -184,10 +185,12 @@ class Klikxxi : MainAPI() {
         return if (isSeries) {
             newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
                 this.posterUrl = posterUrl
+                this.posterHeaders = posterHeaders
             }
         } else {
             newMovieSearchResponse(title, href, TvType.Movie) {
                 this.posterUrl = posterUrl
+                this.posterHeaders = posterHeaders
                 if (!quality.isNullOrBlank()) addQuality(quality)
                 this.score = Score.from10(ratingText?.toDoubleOrNull())
             }
@@ -206,7 +209,11 @@ class Klikxxi : MainAPI() {
         val href = this.selectFirst("a")!!.attr("href")
         val posterElement = this.selectFirst("img.wp-post-image, img.attachment-large, img")
         val posterUrl = posterElement?.fixPoster()?.let { fixUrl(it) }
-        return newMovieSearchResponse(title, href, TvType.Movie) { this.posterUrl = posterUrl }
+        val posterHeaders = posterUrl?.let(::posterHeaders)
+        return newMovieSearchResponse(title, href, TvType.Movie) {
+            this.posterUrl = posterUrl
+            this.posterHeaders = posterHeaders
+        }
     }
 
 
@@ -332,6 +339,7 @@ class Klikxxi : MainAPI() {
         return if (tvType == TvType.TvSeries) {
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
+                this.posterHeaders = poster?.let(::posterHeaders)
                 this.plot = description
                 this.tags = tags
                 this.year = year
@@ -342,6 +350,7 @@ class Klikxxi : MainAPI() {
         } else {
             newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster
+                this.posterHeaders = poster?.let(::posterHeaders)
                 this.plot = description
                 this.tags = tags
                 this.year = year
@@ -466,6 +475,22 @@ class Klikxxi : MainAPI() {
         if (this == null) return ""
         val regex = Regex("-\\d+x\\d+(?=\\.(webp|jpg|jpeg|png))", RegexOption.IGNORE_CASE)
         return this.replace(regex, "")
+    }
+
+    private fun posterHeaders(url: String): Map<String, String> {
+        val referer = runCatching { URI(url).let { "${it.scheme}://${it.host}/" } }
+            .getOrNull()
+            ?: mainUrl
+        val userAgent = defaultHeaders["User-Agent"].orEmpty()
+        val cookie = runCatching {
+            val manager = CookieManager.getInstance()
+            manager.getCookie(url) ?: manager.getCookie(referer.trimEnd('/'))
+        }.getOrNull().orEmpty()
+        return buildMap {
+            put("Referer", referer)
+            if (userAgent.isNotBlank()) put("User-Agent", userAgent)
+            if (cookie.isNotBlank()) put("Cookie", cookie)
+        }
     }
 
     /** Base URL dari sebuah URL (scheme + host) */
