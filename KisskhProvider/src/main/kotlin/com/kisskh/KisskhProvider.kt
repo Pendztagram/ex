@@ -69,7 +69,7 @@ class KisskhProvider : MainAPI() {
     }
 
     private fun Media.toSearchResponse(): SearchResponse? {
-        if (!settingsForProvider.enableAdult && this.label!!.contains("RAW")) return null
+        if (!settingsForProvider.enableAdult && this.label?.contains("RAW") == true) return null
         return newAnimeSearchResponse(
             title ?: return null,
             "$title/$id",
@@ -137,18 +137,27 @@ class KisskhProvider : MainAPI() {
     ): Boolean {
         val loadData = parseJson<Data>(data)
 
-      
-        val kkey = app.get("${KISSKH_API}${loadData.epsId}&version=2.8.10", timeout = 10000)
-            .parsedSafe<Key>()?.key ?: ""
+        val episodeReferer =
+            "$mainUrl/Drama/${getTitle("${loadData.title}")}/Episode-${loadData.eps}?id=${loadData.id}&ep=${loadData.epsId}&page=0&pageSize=100"
+
+        val epsId = loadData.epsId ?: return false
+
+        val kkey = app.get("${KISSKH_API}${epsId}&version=2.8.10")
+            .parsedSafe<Key>()?.key
+            ?.trim()
+            .orEmpty()
 
         app.get(
-            "$mainUrl/api/DramaList/Episode/${loadData.epsId}.png?err=false&ts=&time=&kkey=$kkey",
-            referer = "$mainUrl/Drama/${getTitle("${loadData.title}")}/Episode-${loadData.eps}?id=${loadData.id}&ep=${loadData.epsId}&page=0&pageSize=100"
+            "$mainUrl/api/DramaList/Episode/${epsId}.png?err=false&ts=&time=&kkey=$kkey",
+            referer = episodeReferer
         ).parsedSafe<Sources>()?.let { source ->
-            listOf(source.video, source.thirdParty).amap { link ->
+            val links = listOf(source.video, source.videoTmp, source.thirdParty)
+                .mapNotNull { it?.trim()?.takeIf { s -> s.isNotBlank() } }
+
+            links.amap { link ->
                 safeApiCall {
                     when {
-                        link?.contains(".m3u8") == true -> {
+                        link.contains(".m3u8", true) -> {
                             M3u8Helper.generateM3u8(
                                 this.name,
                                 fixUrl(link),
@@ -157,7 +166,7 @@ class KisskhProvider : MainAPI() {
                             ).forEach(callback)
                         }
 
-                        link?.contains("mp4") == true -> {
+                        link.contains(".mp4", true) -> {
                             callback.invoke(
                                 newExtractorLink(
                                     this.name,
@@ -172,23 +181,36 @@ class KisskhProvider : MainAPI() {
                         }
 
                         else -> {
-                            loadExtractor(
-                                link?.substringBefore("=http") ?: return@safeApiCall,
-                                "$mainUrl/",
-                                subtitleCallback,
-                                callback
-                            )
+                            val normalized = fixUrl(link)
+                            val candidates = buildList {
+                                add(normalized)
+                                if (normalized.contains("=http", true)) {
+                                    add(normalized.substringBefore("=http"))
+                                }
+                            }.distinct()
+
+                            candidates.amap { candidate ->
+                                safeApiCall {
+                                    loadExtractor(
+                                        candidate,
+                                        episodeReferer,
+                                        subtitleCallback,
+                                        callback
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
         }
 
-      
-        val kkey1 = app.get("${KISSKH_SUB_API}${loadData.epsId}&version=2.8.10", timeout = 10000)
-            .parsedSafe<Key>()?.key ?: ""
+        val kkey1 = app.get("${KISSKH_SUB_API}${epsId}&version=2.8.10")
+            .parsedSafe<Key>()?.key
+            ?.trim()
+            .orEmpty()
 
-        app.get("$mainUrl/api/Sub/${loadData.epsId}?kkey=$kkey1").text.let { res ->
+        app.get("$mainUrl/api/Sub/${epsId}?kkey=$kkey1").text.let { res ->
             tryParseJson<List<Subtitle>>(res)?.map { sub ->
                 subtitleCallback.invoke(
                     newSubtitleFile(
@@ -250,6 +272,7 @@ class KisskhProvider : MainAPI() {
 
     data class Sources(
         @JsonProperty("Video") val video: String?,
+        @JsonProperty("Video_tmp") val videoTmp: String? = null,
         @JsonProperty("ThirdParty") val thirdParty: String?,
     )
 

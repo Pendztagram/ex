@@ -3,6 +3,7 @@ package com.hexated
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.extractors.helper.AesHelper
 import com.lagradost.cloudstream3.mvvm.logError
+import com.lagradost.cloudstream3.mvvm.safeApiCall
 import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.nicehttp.NiceResponse
@@ -1286,16 +1287,19 @@ object SoraExtractor : SoraStream() {
             val sources = app.get(videoUrl).parsedSafe<KisskhSources>()
 
             val videoLink = sources?.video
+            val videoTmp = sources?.videoTmp
             val thirdParty = sources?.thirdParty
 
             val episodeReferer =
                 "$mainUrl/Drama/${matched.title?.let { getKisskhTitle(it) }.orEmpty()}/Episode-${targetEp.number?.toInt() ?: episode}?id=$dramaId&ep=$epsId&page=0&pageSize=100"
 
-            listOfNotNull(videoLink, thirdParty).forEach { link ->
+            listOfNotNull(videoLink, videoTmp, thirdParty)
+                .mapNotNull { it.trim().takeIf { s -> s.isNotBlank() } }
+                .forEach { link ->
                 if (link.contains(".m3u8")) {
                     M3u8Helper.generateM3u8(
                         "Kisskh",
-                        link,
+                        fixUrl(link),
                         referer = "$mainUrl/",
                         headers = mapOf("Origin" to mainUrl)
                     ).forEach(callback)
@@ -1304,19 +1308,29 @@ object SoraExtractor : SoraStream() {
                         newExtractorLink(
                             "Kisskh",
                             "Kisskh",
-                            link,
+                            fixUrl(link),
                             ExtractorLinkType.VIDEO
                         ) {
                             this.referer = mainUrl
                         }
                     )
                 } else {
-                    loadExtractor(
-                        link.substringBefore("=http"),
-                        episodeReferer,
-                        subtitleCallback,
-                        callback
-                    )
+                    val normalized = fixUrl(link)
+                    val candidates = buildList {
+                        add(normalized)
+                        if (normalized.contains("=http", true)) add(normalized.substringBefore("=http"))
+                    }.distinct()
+
+                    candidates.forEach { candidate ->
+                        safeApiCall {
+                            loadExtractor(
+                                candidate,
+                                episodeReferer,
+                                subtitleCallback,
+                                callback
+                            )
+                        }
+                    }
                 }
             }
 
@@ -1402,6 +1416,7 @@ object SoraExtractor : SoraStream() {
     private data class KisskhKey(@param:JsonProperty("key") val key: String?)
     private data class KisskhSources(
         @param:JsonProperty("Video") val video: String?,
+        @param:JsonProperty("Video_tmp") val videoTmp: String? = null,
         @param:JsonProperty("ThirdParty") val thirdParty: String?
     )
     private data class KisskhSubtitle(
