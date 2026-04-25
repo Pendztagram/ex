@@ -546,7 +546,6 @@ class Klikxxi : MainAPI() {
                 ?.substringBefore(" ")
                 ?.trim()
                 ?.takeIf(::isValidPosterCandidate)
-                ?.fixImageQuality()
                 ?.let(::fixUrl)
                 ?.let(::normalizePosterUrl)
         }
@@ -599,28 +598,18 @@ class Klikxxi : MainAPI() {
         return this.replace(regex, "")
     }
 
-    private fun posterHeaders(url: String): Map<String, String> {
-        val posterBaseUrl = runCatching { getBaseUrl(url) }.getOrDefault(mainUrl)
-        val sameHost = runCatching {
-            URI(posterBaseUrl).host.equals(URI(mainUrl).host, ignoreCase = true)
-        }.getOrDefault(false)
+private fun posterHeaders(url: String): Map<String, String> {
         val userAgent = defaultHeaders["User-Agent"].orEmpty()
         val cookie = cfCookieHeader.orEmpty()
         return buildMap {
-            put("Referer", if (sameHost) mainUrl else "$posterBaseUrl/")
+            put("Referer", mainUrl)
             if (userAgent.isNotBlank()) put("User-Agent", userAgent)
-            if (sameHost && cookie.isNotBlank()) put("Cookie", cookie)
+            if (cookie.isNotBlank()) put("Cookie", cookie)
         }
     }
 
-    private fun normalizePosterUrl(url: String): String {
-        val fixed = url.replace("&amp;", "&").trim()
-        val wpProxyMatch = Regex("""https?://i\d+\.wp\.com/([^?]+)(?:\?.*)?""", RegexOption.IGNORE_CASE)
-            .find(fixed)
-            ?.groupValues
-            ?.getOrNull(1)
-
-        return wpProxyMatch?.let { "https://${it.trimStart('/')}" } ?: fixed
+private fun normalizePosterUrl(url: String): String {
+        return url.replace("&amp;", "&").trim()
     }
 
     /** Base URL dari sebuah URL (scheme + host) */
