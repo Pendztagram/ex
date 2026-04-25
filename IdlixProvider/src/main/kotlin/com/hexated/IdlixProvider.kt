@@ -437,9 +437,16 @@ class IdlixProvider : MainAPI() {
             val picked = listOf(decryptedSrc, iframeSrc, sourceSrc, scriptUrl)
                 .firstOrNull { it.startsWith("http", ignoreCase = true) }
             if (picked != null) {
+                if (emitDirectMediaLinks(picked, embedPageUrl, callback)) {
+                    return true
+                }
                 loadExtractor(picked, embedPageUrl, subtitleCallback, callback)
                 return true
             }
+        }
+
+        if (emitDirectMediaLinks(resolvedUrl, embedPageUrl, callback)) {
+            return true
         }
 
         loadExtractor(resolvedUrl, embedPageUrl, subtitleCallback, callback)
@@ -523,6 +530,75 @@ class IdlixProvider : MainAPI() {
         require(hex.length % 2 == 0)
         return ByteArray(hex.length / 2) { index ->
             hex.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+        }
+    }
+
+    private suspend fun emitDirectMediaLinks(
+        targetUrl: String,
+        refererUrl: String,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val cleaned = targetUrl.substringBefore('#').trim()
+        if (cleaned.isBlank()) return false
+
+        if (cleaned.contains(".m3u8", ignoreCase = true)) {
+            generateM3u8(name, cleaned, refererUrl).forEach(callback)
+            return true
+        }
+
+        if (cleaned.contains(".mp4", ignoreCase = true)) {
+            callback(
+                newExtractorLink(
+                    source = name,
+                    name = "$name Auto",
+                    url = cleaned,
+                ) {
+                    referer = refererUrl
+                }
+            )
+            return true
+        }
+
+        val isMajorplayEmbed = Regex("""https?://(?:[a-z0-9-]+\.)*majorplay\.net/embed/""", RegexOption.IGNORE_CASE)
+            .containsMatchIn(cleaned)
+        if (!isMajorplayEmbed) return false
+
+        val doc = runCatching {
+            app.get(cleaned, referer = refererUrl, interceptor = cloudflareInterceptor).document
+        }.getOrNull() ?: return false
+
+        val sourceSrc = doc.selectFirst("video source[src], source[src]")?.attr("abs:src")?.trim().orEmpty()
+        val scriptData = doc.select("script").joinToString("\n") { it.data() }
+        val hlsFromScript = Regex(
+            """["']hlsUrl["']\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']""",
+            RegexOption.IGNORE_CASE
+        )
+            .find(scriptData)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.replace("\\/", "/")
+            ?.trim()
+            .orEmpty()
+
+        val streamUrl = listOf(sourceSrc, hlsFromScript).firstOrNull { it.startsWith("http", ignoreCase = true) }
+            ?: return false
+
+        return if (streamUrl.contains(".m3u8", ignoreCase = true)) {
+            generateM3u8(name, streamUrl, cleaned).forEach(callback)
+            true
+        } else if (streamUrl.contains(".mp4", ignoreCase = true)) {
+            callback(
+                newExtractorLink(
+                    source = name,
+                    name = "$name Auto",
+                    url = streamUrl,
+                ) {
+                    referer = cleaned
+                }
+            )
+            true
+        } else {
+            false
         }
     }
 }
