@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.hexated.SoraExtractor.invokeKisskh
 import com.hexated.SoraExtractor.invokeIdlix
+import com.hexated.SoraExtractor.invokeYflix
 import com.hexated.SoraExtractor.invokeVidfast
 import com.hexated.SoraExtractor.invokeVidlink
 import com.hexated.SoraExtractor.invokeVidsrc
@@ -83,6 +84,7 @@ open class SoraStream(val sharedPref: SharedPreferences? = null) : TmdbProvider(
 
         /** ALL SOURCES */
         const val idlixAPI = "https://z1.idlixku.com"
+        const val yflixAPI = "https://yflix.to"
         const val azmoviesAPI = "https://azmovies.to"
         const val noxxAPI = "https://noxx.to"
         const val vidsrcccAPI = "https://vidsrc.cc"
@@ -149,6 +151,7 @@ open class SoraStream(val sharedPref: SharedPreferences? = null) : TmdbProvider(
             SourceDescriptor("noxx", SourceGroup.FALLBACK, 220, movie = false),
             SourceDescriptor("watch32", SourceGroup.FALLBACK, 230),
             SourceDescriptor("kisskh", SourceGroup.FALLBACK, 240),
+            SourceDescriptor("yflix", SourceGroup.EMBED, 250),
         ).sortedBy { it.priority }
 
         suspend fun getApiBase(): String {
@@ -545,6 +548,15 @@ open class SoraStream(val sharedPref: SharedPreferences? = null) : TmdbProvider(
                     callback
                 )
             }
+
+            "yflix" -> invokeYflix(
+                res.id,
+                res.imdbId,
+                res.season,
+                res.episode,
+                subtitleCallback,
+                callback
+            )
         }
     }
 

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.network.CloudflareKiller
+import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorApi
@@ -125,4 +126,72 @@ open class Jeniusplay2 : ExtractorApi() {
         @JsonProperty("file") val file: String,
         @JsonProperty("label") val label: String?,
     )
+}
+
+open class Majorplay2 : ExtractorApi() {
+    override val name = "Majorplay"
+    override val mainUrl = "https://majorplay.net"
+    override val requiresReferer = true
+    private val cloudflareInterceptor by lazy { CloudflareKiller() }
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val mediaRegex = Regex(
+            """https?://[^"'\s]+(?:\.m3u8|\.mp4)[^"'\s]*""",
+            RegexOption.IGNORE_CASE
+        )
+
+        val resolvedUrl = runCatching {
+            app.get(
+                url,
+                referer = referer,
+                interceptor = WebViewResolver(
+                    interceptUrl = mediaRegex,
+                    additionalUrls = listOf(
+                        Regex("""https?://[^"'\s]+\.m3u8[^"'\s]*""", RegexOption.IGNORE_CASE),
+                        Regex("""https?://[^"'\s]+\.mp4[^"'\s]*""", RegexOption.IGNORE_CASE),
+                        Regex("""https?://[^"'\s]+\.txt[^"'\s]*""", RegexOption.IGNORE_CASE),
+                    ),
+                    useOkhttp = false,
+                    timeout = 20_000L
+                )
+            ).url.substringBefore('#')
+        }.getOrNull() ?: run {
+            val doc = runCatching { app.get(url, referer = referer, interceptor = cloudflareInterceptor).document }.getOrNull()
+            val src = doc?.selectFirst("video source[src], source[src]")?.attr("abs:src")?.trim().orEmpty()
+            val videoSrc = doc?.selectFirst("video[src]")?.attr("abs:src")?.trim().orEmpty()
+            val scriptData = doc?.select("script")?.joinToString("\n") { it.data() }.orEmpty()
+
+            val patterns = listOf(
+                Regex("""["']hlsUrl["']\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE),
+                Regex("""["']file["']\s*:\s*["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""", RegexOption.IGNORE_CASE),
+                Regex("""["']src["']\s*:\s*["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""", RegexOption.IGNORE_CASE),
+                Regex("""["']url["']\s*:\s*["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""", RegexOption.IGNORE_CASE),
+                Regex("""sources\s*:\s*\[\s*\{[^}]*["']file["']\s*:\s*["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""", RegexOption.IGNORE_CASE),
+                Regex("""https?://[^"'\s]+\.m3u8[^"'\s]*""", RegexOption.IGNORE_CASE),
+                Regex("""https?://[^"'\s]+\.mp4[^"'\s]*""", RegexOption.IGNORE_CASE),
+            )
+
+            val scriptUrl = patterns.firstNotNullOfOrNull { regex ->
+                regex.find(scriptData)?.groupValues?.getOrNull(1)?.trim()
+            } ?: ""
+
+            listOf(src, videoSrc, scriptUrl).firstOrNull { it.startsWith("http", ignoreCase = true) }
+        } ?: return
+
+        if (resolvedUrl.contains(".m3u8", ignoreCase = true)) {
+            M3u8Helper.generateM3u8(name, resolvedUrl, referer ?: url).forEach(callback)
+            return
+        }
+
+        callback.invoke(
+            newExtractorLink(name, name, resolvedUrl, ExtractorLinkType.VIDEO) {
+                this.referer = referer ?: url
+            }
+        )
+    }
 }

@@ -30,21 +30,150 @@ object SoraExtractor : SoraStream() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val fixTitle = title?.createSlug() ?: return
-        val url = if (season == null) {
-            "$idlixAPI/movie/$fixTitle-$year"
-        } else {
-            "$idlixAPI/episode/$fixTitle-season-$season-episode-$episode"
-        }
-        invokeWpmovies(
-            "Idlix",
-            url,
-            subtitleCallback,
-            callback,
-            encrypt = true,
-            hasCloudflare = true,
+        val query = title?.trim() ?: return
+        val searchRes = app.get(
+            "$idlixAPI/api/search?q=${query.urlEncodeCompat()}&limit=20",
             interceptor = wpRedisInterceptor
+        ).text
+        val results = tryParseJson<IdlixSearchResponse>(searchRes)?.results ?: return
+
+        val match = results.firstOrNull { result ->
+            val resultYear = (result.releaseDate ?: result.firstAirDate)
+                ?.substringBefore("-")?.toIntOrNull()
+            (result.title?.equals(query, true) == true || result.originalTitle?.equals(query, true) == true) &&
+            (year == null || resultYear == year)
+        } ?: results.firstOrNull { result ->
+            result.title?.contains(query, true) == true || result.originalTitle?.contains(query, true) == true
+        } ?: return
+
+        val isMovie = season == null
+        val contentType = if (isMovie) "movie" else "episode"
+        val detailUrl = if (isMovie || match.contentType == "movie") {
+            "$idlixAPI/api/movies/${match.slug}"
+        } else {
+            "$idlixAPI/api/series/${match.slug}"
+        }
+        val detail = app.get(detailUrl, interceptor = wpRedisInterceptor)
+            .parsedSafe<IdlixDetailResponse>() ?: return
+
+        val contentId = if (isMovie) {
+            detail.id ?: return
+        } else {
+            val targetSeason = detail.seasons?.find { it.seasonNumber == season }
+                ?: detail.firstSeason
+            val targetEpisode = targetSeason?.episodes?.find { it.episodeNumber == episode }
+            targetEpisode?.id ?: return
+        }
+
+        val ts = System.currentTimeMillis()
+        val aclrRes = app.get(
+            "$idlixAPI/pagead/ad_frame.js?_=$ts",
+            referer = idlixAPI,
+            interceptor = wpRedisInterceptor
+        ).text
+        val aclr = Regex("""__aclr\s*=\s*"([a-f0-9]+)""").find(aclrRes)?.groupValues?.getOrNull(1)
+
+        val challengeJson = """{"contentType": "$contentType", "contentId": "$contentId"${if (aclr != null) ", \"clearance\": \"$aclr\"" else ""}}"""
+        val challengeText = app.post(
+            "$idlixAPI/api/watch/challenge",
+            requestBody = challengeJson.toRequestBody("application/json".toMediaTypeOrNull()),
+            headers = mapOf(
+                "accept" to "*/*",
+                "content-type" to "application/json",
+                "origin" to idlixAPI,
+                "referer" to idlixAPI,
+            ),
+            interceptor = wpRedisInterceptor
+        ).text
+
+        val challengeRes = tryParseJson<IdlixChallengeResponse>(challengeText) ?: return
+        val nonce = solvePow(challengeRes.challenge, challengeRes.difficulty)
+
+        val solveJson = """{"challenge": "${challengeRes.challenge}", "signature": "${challengeRes.signature}", "nonce": $nonce}"""
+        val solveRes = app.post(
+            "$idlixAPI/api/watch/solve",
+            requestBody = solveJson.toRequestBody("application/json".toMediaTypeOrNull()),
+            headers = mapOf(
+                "accept" to "*/*",
+                "content-type" to "application/json",
+                "origin" to idlixAPI,
+                "referer" to idlixAPI,
+            ),
+            interceptor = wpRedisInterceptor
+        ).text
+
+        val embedUrl = extractUrlFromSolveResponse(solveRes) ?: return
+        val embedPageUrl = when {
+            embedUrl.startsWith("http", true) -> embedUrl
+            embedUrl.startsWith("/") -> "$idlixAPI$embedUrl"
+            else -> "$idlixAPI/$embedUrl"
+        }
+
+        loadExtractor(embedPageUrl, "$idlixAPI/", subtitleCallback, callback)
+    }
+
+    suspend fun invokeYflix(
+        tmdbId: Int?,
+        imdbId: String?,
+        season: Int?,
+        episode: Int?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val ids = listOfNotNull(tmdbId?.toString(), imdbId).distinct()
+        if (ids.isEmpty()) return
+
+        val patterns = listOf(
+            if (season == null) "embed/movie/%s" else "embed/tv/%s/$season/$episode",
+            if (season == null) "watch/movie/%s" else "watch/tv/%s/$season/$episode",
+            if (season == null) "movie/%s" else "tv/%s/$season/$episode",
         )
+
+        for (id in ids) {
+            for (pattern in patterns) {
+                val url = "$yflixAPI/${pattern.format(id)}"
+                val res = runCatching { app.get(url, interceptor = wpRedisInterceptor) }.getOrNull() ?: continue
+                val doc = res.document
+                val html = res.text
+
+                val iframe = doc.selectFirst("iframe[src]")?.attr("abs:src")?.trim().orEmpty()
+                    .let { if (it.startsWith("//")) "https:$it" else it }
+                    .takeIf { it.isNotBlank() }
+                val iframeData = doc.selectFirst("iframe[data-src]")?.attr("abs:data-src")?.trim().orEmpty()
+                    .let { if (it.startsWith("//")) "https:$it" else it }
+                    .takeIf { it.isNotBlank() }
+                val videoSrc = doc.selectFirst("video source[src], source[src]")?.attr("abs:src")?.trim().orEmpty()
+                    .takeIf { it.isNotBlank() }
+                val videoDirect = doc.selectFirst("video[src]")?.attr("abs:src")?.trim().orEmpty()
+                    .takeIf { it.isNotBlank() }
+
+                val scriptData = doc.select("script").joinToString("\n") { it.data() }
+                val scriptUrl = Regex("""https?://[^"'\s]+\.(?:m3u8|mp4)[^"'\s]*""", RegexOption.IGNORE_CASE)
+                    .find(scriptData)?.value.orEmpty().takeIf { it.isNotBlank() }
+
+                val picked = listOfNotNull(iframe, iframeData, videoSrc, videoDirect, scriptUrl)
+                    .firstOrNull { it.startsWith("http", true) } ?: continue
+
+                if (picked.contains(".m3u8", true)) {
+                    M3u8Helper.generateM3u8("Yflix", picked, "$yflixAPI/").forEach(callback)
+                    return
+                } else if (picked.contains(".mp4", true)) {
+                    callback.invoke(
+                        newExtractorLink("Yflix", "Yflix", picked, INFER_TYPE) {
+                            this.referer = "$yflixAPI/"
+                        }
+                    )
+                    return
+                } else {
+                    loadExtractor(picked, "$yflixAPI/", subtitleCallback, callback)
+                    return
+                }
+            }
+        }
+
+        // Fallback: webview on first pattern with first id
+        val fallbackUrl = "$yflixAPI/${patterns.first().format(ids.first())}"
+        invokeWebviewEmbedSource("Yflix", fallbackUrl, "$yflixAPI/", yflixAPI, callback)
     }
 
     private suspend fun invokeWpmovies(
@@ -1296,39 +1425,62 @@ object SoraExtractor : SoraStream() {
             listOfNotNull(videoLink, videoTmp, thirdParty)
                 .mapNotNull { it.trim().takeIf { s -> s.isNotBlank() } }
                 .forEach { link ->
-                if (link.contains(".m3u8")) {
-                    M3u8Helper.generateM3u8(
-                        "Kisskh",
-                        fixUrl(link),
-                        referer = "$mainUrl/",
-                        headers = mapOf("Origin" to mainUrl)
-                    ).forEach(callback)
-                } else if (link.contains(".mp4")) {
-                    callback.invoke(
-                        newExtractorLink(
-                            "Kisskh",
+                when {
+                    link.contains(".m3u8", true) -> {
+                        M3u8Helper.generateM3u8(
                             "Kisskh",
                             fixUrl(link),
-                            ExtractorLinkType.VIDEO
-                        ) {
-                            this.referer = mainUrl
+                            referer = "$mainUrl/",
+                            headers = mapOf("Origin" to mainUrl)
+                        ).forEach(callback)
+                    }
+                    link.contains(".mp4", true) -> {
+                        callback.invoke(
+                            newExtractorLink(
+                                "Kisskh",
+                                "Kisskh",
+                                fixUrl(link),
+                                ExtractorLinkType.VIDEO
+                            ) {
+                                this.referer = mainUrl
+                            }
+                        )
+                    }
+                    link.contains(".txt", true) -> {
+                        val txtContent = runCatching {
+                            app.get(fixUrl(link), referer = episodeReferer).text
+                        }.getOrNull() ?: return@forEach
+                        val decrypted = kisskhDecryptTxt(txtContent)
+                        val streamUrl = Regex("""https?://[^"'\s]+\.(?:m3u8|mp4)[^"'\s]*""", RegexOption.IGNORE_CASE)
+                            .find(decrypted)?.value
+                        if (!streamUrl.isNullOrBlank()) {
+                            if (streamUrl.contains(".m3u8", true)) {
+                                M3u8Helper.generateM3u8("Kisskh", streamUrl, "$mainUrl/", headers = mapOf("Origin" to mainUrl)).forEach(callback)
+                            } else {
+                                callback.invoke(
+                                    newExtractorLink("Kisskh", "Kisskh", streamUrl, ExtractorLinkType.VIDEO) {
+                                        this.referer = mainUrl
+                                    }
+                                )
+                            }
                         }
-                    )
-                } else {
-                    val normalized = fixUrl(link)
-                    val candidates = buildList {
-                        add(normalized)
-                        if (normalized.contains("=http", true)) add(normalized.substringBefore("=http"))
-                    }.distinct()
+                    }
+                    else -> {
+                        val normalized = fixUrl(link)
+                        val candidates = buildList {
+                            add(normalized)
+                            if (normalized.contains("=http", true)) add(normalized.substringBefore("=http"))
+                        }.distinct()
 
-                    candidates.forEach { candidate ->
-                        safeApiCall {
-                            loadExtractor(
-                                candidate,
-                                episodeReferer,
-                                subtitleCallback,
-                                callback
-                            )
+                        candidates.forEach { candidate ->
+                            safeApiCall {
+                                loadExtractor(
+                                    candidate,
+                                    episodeReferer,
+                                    subtitleCallback,
+                                    callback
+                                )
+                            }
                         }
                     }
                 }
@@ -1402,6 +1554,139 @@ object SoraExtractor : SoraStream() {
             }
         }
     }
+
+    // Idlix helpers
+    private fun solvePow(challenge: String, difficulty: Int): Int {
+        val target = "0".repeat(difficulty)
+        var nonce = 0
+        while (true) {
+            val hash = sha256(challenge + nonce)
+            if (hash.startsWith(target)) return nonce
+            nonce++
+        }
+    }
+
+    private fun sha256(input: String): String {
+        val bytes = java.security.MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
+
+    private fun extractUrlFromSolveResponse(raw: String): String? {
+        val trimmed = raw.trim()
+        if (trimmed.startsWith("http", true)) return trimmed
+        Regex("""""'(https?://[^""']+)""'""", RegexOption.IGNORE_CASE).find(trimmed)?.groupValues?.getOrNull(1)?.let { return it }
+        Regex("""""'(/(?:embed|player|video|play|e|v|watch)[^""']*)""'""", RegexOption.IGNORE_CASE).find(trimmed)?.groupValues?.getOrNull(1)?.let { return it }
+        val normalized = trimmed.replace("\\/", "/")
+        Regex("""https?://[^""'\s]+""", RegexOption.IGNORE_CASE).find(normalized)?.value?.let { return it }
+        val json = runCatching { JSONObject(trimmed) }.getOrNull() ?: return null
+        fun findUrl(obj: Any?): String? {
+            when (obj) {
+                is String -> if (obj.startsWith("http", true) || obj.startsWith("/")) return obj
+                is JSONObject -> {
+                    val keys = obj.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        if (key.equals("embedUrl", true) || key.equals("url", true) ||
+                            key.equals("streamUrl", true) || key.equals("playbackUrl", true) ||
+                            key.equals("src", true) || key.equals("file", true) || key.equals("link", true)) {
+                            findUrl(obj.get(key))?.let { return it }
+                        }
+                    }
+                    val keys2 = obj.keys()
+                    while (keys2.hasNext()) { findUrl(obj.get(keys2.next()))?.let { return it } }
+                }
+            }
+            return null
+        }
+        return findUrl(json)
+    }
+
+    // Kisskh .txt decryption helper
+    private fun kisskhDecryptTxt(content: String): String {
+        val chunkRegex = Regex("^\\d+$", RegexOption.MULTILINE)
+        val chunks = content.split(chunkRegex).filter(String::isNotBlank).map(String::trim)
+        return chunks.mapIndexed { index, chunk ->
+            if (chunk.isBlank()) return@mapIndexed ""
+            val parts = chunk.split("\n")
+            if (parts.isEmpty()) return@mapIndexed ""
+            val header = parts.first()
+            val text = parts.drop(1)
+            val d = text.joinToString("\n") { line ->
+                runCatching { kisskhDecryptLine(line) }.getOrDefault(line)
+            }
+            listOf(index + 1, header, d).joinToString("\n")
+        }.filter { it.isNotEmpty() }.joinToString("\n\n")
+    }
+
+    private fun kisskhDecryptLine(encryptedB64: String): String {
+        val keyIvPairs = listOf(
+            Pair("AmSmZVcH93UQUezi".toByteArray(Charsets.UTF_8), intArrayOf(1382367819, 1465333859, 1902406224, 1164854838).toKisskhByteArray()),
+            Pair("8056483646328763".toByteArray(Charsets.UTF_8), intArrayOf(909653298, 909193779, 925905208, 892483379).toKisskhByteArray()),
+        )
+        val encryptedBytes = try {
+            android.util.Base64.decode(encryptedB64, android.util.Base64.DEFAULT)
+        } catch (_: Exception) {
+            return encryptedB64
+        }
+        for ((keyBytes, ivBytes) in keyIvPairs) {
+            try {
+                val cipher = javax.crypto.Cipher.getInstance("AES/CBC/PKCS5Padding")
+                cipher.init(javax.crypto.Cipher.DECRYPT_MODE, javax.crypto.spec.SecretKeySpec(keyBytes, "AES"), javax.crypto.spec.IvParameterSpec(ivBytes))
+                return String(cipher.doFinal(encryptedBytes), Charsets.UTF_8)
+            } catch (_: Exception) { }
+        }
+        return encryptedB64
+    }
+
+    private fun IntArray.toKisskhByteArray(): ByteArray {
+        return ByteArray(size * 4).also { bytes ->
+            forEachIndexed { index, value ->
+                bytes[index * 4] = (value shr 24).toByte()
+                bytes[index * 4 + 1] = (value shr 16).toByte()
+                bytes[index * 4 + 2] = (value shr 8).toByte()
+                bytes[index * 4 + 3] = value.toByte()
+            }
+        }
+    }
+
+    // Idlix data classes
+    private data class IdlixSearchResponse(
+        @param:JsonProperty("results") val results: ArrayList<IdlixSearchResult>? = arrayListOf(),
+    )
+
+    private data class IdlixSearchResult(
+        @param:JsonProperty("id") val id: String? = null,
+        @param:JsonProperty("contentType") val contentType: String? = null,
+        @param:JsonProperty("title") val title: String? = null,
+        @param:JsonProperty("originalTitle") val originalTitle: String? = null,
+        @param:JsonProperty("slug") val slug: String? = null,
+        @param:JsonProperty("releaseDate") val releaseDate: String? = null,
+        @param:JsonProperty("firstAirDate") val firstAirDate: String? = null,
+    )
+
+    private data class IdlixDetailResponse(
+        @param:JsonProperty("id") val id: String? = null,
+        @param:JsonProperty("slug") val slug: String? = null,
+        @param:JsonProperty("contentType") val contentType: String? = null,
+        @param:JsonProperty("seasons") val seasons: ArrayList<IdlixSeason>? = arrayListOf(),
+        @param:JsonProperty("firstSeason") val firstSeason: IdlixSeason? = null,
+    )
+
+    private data class IdlixSeason(
+        @param:JsonProperty("seasonNumber") val seasonNumber: Int? = null,
+        @param:JsonProperty("episodes") val episodes: ArrayList<IdlixEpisode>? = arrayListOf(),
+    )
+
+    private data class IdlixEpisode(
+        @param:JsonProperty("id") val id: String? = null,
+        @param:JsonProperty("episodeNumber") val episodeNumber: Int? = null,
+    )
+
+    private data class IdlixChallengeResponse(
+        @param:JsonProperty("challenge") val challenge: String,
+        @param:JsonProperty("signature") val signature: String,
+        @param:JsonProperty("difficulty") val difficulty: Int,
+    )
 
     private data class KisskhMedia(
         @param:JsonProperty("id") val id: Int?,

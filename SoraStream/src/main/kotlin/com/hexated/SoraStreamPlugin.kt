@@ -13,5 +13,6 @@ class SoraStreamPlugin: Plugin() {
         SoraStream.context = context
         registerMainAPI(SoraStream(sharedPref))
         registerExtractorAPI(Jeniusplay2())
+        registerExtractorAPI(Majorplay2())
     }
 }
