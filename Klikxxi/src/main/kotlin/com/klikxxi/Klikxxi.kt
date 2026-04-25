@@ -35,8 +35,8 @@ class Klikxxi : MainAPI() {
         @Volatile private var cfCookieHeader: String? = null
 
         // Opening list pages can be slow due to Cloudflare and heavy HTML.
-        const val LIST_TIMEOUT_SECONDS = 240L
-        const val DEFAULT_TIMEOUT_SECONDS = 120L
+        const val LIST_TIMEOUT_SECONDS = 360L
+        const val DEFAULT_TIMEOUT_SECONDS = 240L
 
         private fun updateCfCookieHeader(cookies: Map<String, String>) {
             if (cookies.isEmpty()) return
