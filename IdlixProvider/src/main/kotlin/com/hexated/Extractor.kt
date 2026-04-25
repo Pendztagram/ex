@@ -4,12 +4,15 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.network.CloudflareKiller
+import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.AppUtils
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.M3u8Helper.Companion.generateM3u8
 import com.lagradost.cloudstream3.utils.getAndUnpack
+import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class Jeniusplay : ExtractorApi() {
     override var name = "Jeniusplay"
@@ -73,5 +76,56 @@ class Jeniusplay : ExtractorApi() {
             str.contains("indonesia", true) || str.contains("bahasa", true) -> "Indonesian"
             else -> str
         }
+    }
+}
+
+class Majorplay : ExtractorApi() {
+    override var name = "Majorplay"
+    override var mainUrl = "https://majorplay.net"
+    override val requiresReferer = true
+    private val cloudflareInterceptor by lazy { CloudflareKiller() }
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val mediaRegex = Regex(
+            """https?://[^"'\\s]+(?:\.m3u8|\.mp4)[^"'\\s]*""",
+            RegexOption.IGNORE_CASE
+        )
+
+        val resolvedUrl = runCatching {
+            app.get(
+                url,
+                referer = referer,
+                interceptor = WebViewResolver(
+                    interceptUrl = mediaRegex,
+                    additionalUrls = listOf(
+                        Regex("""https?://[^"'\\s]+mime=video(?:%2F|/)mp4[^"'\\s]*""", RegexOption.IGNORE_CASE),
+                        Regex("""https?://[^"'\\s]+\.m3u8[^"'\\s]*""", RegexOption.IGNORE_CASE),
+                        Regex("""https?://[^"'\\s]+\.mp4[^"'\\s]*""", RegexOption.IGNORE_CASE),
+                    ),
+                    useOkhttp = false,
+                    timeout = 20_000L
+                )
+            ).url.substringBefore('#')
+        }.getOrNull() ?: run {
+            val doc = runCatching { app.get(url, referer = referer, interceptor = cloudflareInterceptor).document }.getOrNull()
+            val src = doc?.selectFirst("video source[src], source[src]")?.attr("abs:src")?.trim().orEmpty()
+            src.takeIf { it.startsWith("http", ignoreCase = true) }
+        } ?: return
+
+        if (resolvedUrl.contains(".m3u8", ignoreCase = true)) {
+            generateM3u8(name, resolvedUrl, url).forEach(callback)
+            return
+        }
+
+        callback.invoke(
+            newExtractorLink(name, name, resolvedUrl, INFER_TYPE) {
+                this.referer = referer ?: url
+            }
+        )
     }
 }
