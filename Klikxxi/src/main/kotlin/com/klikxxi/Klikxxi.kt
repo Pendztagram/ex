@@ -55,25 +55,58 @@ class Klikxxi : MainAPI() {
 
     // Use CloudflareKiller here to avoid blocking main-page loads with a WebView flow.
     private val cloudflareInterceptor by lazy { CloudflareKiller() }
+    private val turnstileInterceptor by lazy { KlikxxiTurnstileInterceptor() }
     private val defaultHeaders = mapOf(
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36"
     )
+
+    private fun looksLikeChallenge(html: String?): Boolean {
+        val preview = html?.take(128 * 1024).orEmpty()
+        if (preview.isBlank()) return false
+        val hints = listOf(
+            "cf-challenge",
+            "cf-browser-verification",
+            "challenge-platform",
+            "Performing security verification",
+            "Verifying you are human",
+            "Just a moment",
+            "Attention Required",
+            "/cdn-cgi/challenge-platform/"
+        )
+        return hints.any { preview.contains(it, ignoreCase = true) }
+    }
 
     private suspend fun request(
         url: String,
         ref: String? = null,
         timeoutSeconds: Long = DEFAULT_TIMEOUT_SECONDS
     ): NiceResponse {
-        val response = app.get(
+        val first = app.get(
             url,
             interceptor = cloudflareInterceptor,
             headers = defaultHeaders,
             referer = ref,
             timeout = timeoutSeconds
         )
-        updateCfCookieHeader(response.cookies)
-        return response
+        updateCfCookieHeader(first.cookies)
+        mainUrl = runCatching { getBaseUrl(first.url) }.getOrDefault(mainUrl)
+
+        // If CloudflareKiller still returns a challenge page, retry using WebView Turnstile flow.
+        if (looksLikeChallenge(first.text)) {
+            val second = app.get(
+                url,
+                interceptor = turnstileInterceptor,
+                headers = defaultHeaders,
+                referer = ref,
+                timeout = timeoutSeconds
+            )
+            updateCfCookieHeader(second.cookies)
+            mainUrl = runCatching { getBaseUrl(second.url) }.getOrDefault(mainUrl)
+            return second
+        }
+
+        return first
     }
 
     private suspend fun requestPost(
@@ -82,7 +115,7 @@ class Klikxxi : MainAPI() {
         ref: String? = null,
         timeoutSeconds: Long = DEFAULT_TIMEOUT_SECONDS
     ): NiceResponse {
-        val response = app.post(
+        val first = app.post(
             url,
             interceptor = cloudflareInterceptor,
             headers = defaultHeaders,
@@ -90,8 +123,24 @@ class Klikxxi : MainAPI() {
             data = data,
             timeout = timeoutSeconds
         )
-        updateCfCookieHeader(response.cookies)
-        return response
+        updateCfCookieHeader(first.cookies)
+        mainUrl = runCatching { getBaseUrl(first.url) }.getOrDefault(mainUrl)
+
+        if (looksLikeChallenge(first.text)) {
+            val second = app.post(
+                url,
+                interceptor = turnstileInterceptor,
+                headers = defaultHeaders,
+                referer = ref,
+                data = data,
+                timeout = timeoutSeconds
+            )
+            updateCfCookieHeader(second.cookies)
+            mainUrl = runCatching { getBaseUrl(second.url) }.getOrDefault(mainUrl)
+            return second
+        }
+
+        return first
     }
     
 
@@ -119,10 +168,19 @@ class Klikxxi : MainAPI() {
 
     val document = request(url, timeoutSeconds = LIST_TIMEOUT_SECONDS).document
 
-    val items = document.select(
+    val primary = document.select(
         "article.has-post-thumbnail, article.item, article.item-infinite, div.latestMovie article, div.latestSeri article"
     )
-        .mapNotNull { it.toSearchResult() }
+    var items = primary.mapNotNull { it.toSearchResult() }
+
+    if (items.isEmpty()) {
+        val fallback = document.select(
+            "div.items article, div#archive-content article, div.items div.item, div.items .item, " +
+                "article, div.item, li.item, div.movie-item"
+        )
+        items = (fallback.mapNotNull { it.toSearchResult() } + fallback.mapNotNull { it.toSearchResultFallback() })
+            .distinctBy { it.url }
+    }
 
     return newHomePageResponse(request.name, items)
 }
@@ -147,6 +205,8 @@ class Klikxxi : MainAPI() {
             selectFirst("h2")?.text(),
             selectFirst("h3")?.text(),
             linkElement.attr("title").takeIf { it.isNotBlank() },
+            selectFirst("img[alt]")?.attr("alt")?.takeIf { it.isNotBlank() },
+            selectFirst("img[title]")?.attr("title")?.takeIf { it.isNotBlank() },
             select("a[href]")
                 .map { it.text().trim() }
                 .filter {
@@ -222,6 +282,30 @@ class Klikxxi : MainAPI() {
                 if (!quality.isNullOrBlank()) addQuality(quality)
                 this.score = Score.from10(ratingText?.toDoubleOrNull())
             }
+        }
+    }
+
+    private fun Element.toSearchResultFallback(): SearchResponse? {
+        val anchor = selectFirst("a[href]") ?: return null
+        val hrefRaw = anchor.attr("href").trim()
+        if (hrefRaw.isBlank() || hrefRaw.startsWith("#")) return null
+        val href = fixUrl(hrefRaw)
+
+        val title = listOfNotNull(
+            anchor.attr("title").takeIf { it.isNotBlank() },
+            anchor.attr("aria-label").takeIf { it.isNotBlank() },
+            selectFirst("img[alt]")?.attr("alt")?.trim()?.takeIf { it.isNotBlank() },
+            selectFirst("img[title]")?.attr("title")?.trim()?.takeIf { it.isNotBlank() }
+        ).firstOrNull()?.trim().orEmpty()
+        if (title.isBlank()) return null
+
+        val posterElement = selectFirst("img") ?: return null
+        val posterUrl = posterElement.fixPoster()?.let(::fixUrl)
+        val posterHeaders = posterUrl?.let(::posterHeaders)
+
+        return newMovieSearchResponse(title, href, TvType.Movie) {
+            this.posterUrl = posterUrl
+            this.posterHeaders = posterHeaders
         }
     }
 
