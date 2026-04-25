@@ -24,6 +24,7 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.base64Decode
 import com.lagradost.cloudstream3.getQualityFromString
 import com.lagradost.cloudstream3.mainPageOf
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.newEpisode
 import com.lagradost.cloudstream3.newHomePageResponse
@@ -35,7 +36,9 @@ import com.lagradost.cloudstream3.toNewSearchResponseList
 import com.lagradost.cloudstream3.utils.AppUtils
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.M3u8Helper.Companion.generateM3u8
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
@@ -48,6 +51,9 @@ class IdlixProvider : MainAPI() {
     override val hasMainPage = true
     override var lang = "id"
     override val hasDownloadSupport = true
+
+    private val cloudflareInterceptor by lazy { CloudflareKiller() }
+
     override val supportedTypes = setOf(
         TvType.Movie,
         TvType.TvSeries,
@@ -302,7 +308,11 @@ class IdlixProvider : MainAPI() {
         val contentType = parsed.type
 
         val ts = System.currentTimeMillis()
-        val aclrRes = app.get("$mainUrl/pagead/ad_frame.js?_=$ts").text
+        val aclrRes = app.get(
+            "$mainUrl/pagead/ad_frame.js?_=$ts",
+            referer = mainUrl,
+            interceptor = cloudflareInterceptor
+        ).text
         val aclr = Regex("""__aclr\s*=\s*"([a-f0-9]+)"""")
             .find(aclrRes)
             ?.groupValues?.getOrNull(1)
@@ -323,11 +333,18 @@ class IdlixProvider : MainAPI() {
             "user-agent" to USER_AGENT,
         )
 
-        val challengeRes = app.post(
+        val challengeText = app.post(
             "$mainUrl/api/watch/challenge",
             requestBody = challengejson.toRequestBody("application/json".toMediaType()),
-            headers = headers
-        ).parsedSafe<ChallengeResponse>() ?: return false
+            headers = headers,
+            interceptor = cloudflareInterceptor
+        ).text
+
+        val challengeRes = AppUtils.tryParseJson<ChallengeResponse>(challengeText)
+            ?: run {
+                Log.d(name, "Idlix challenge parse failed: ${challengeText.take(200)}")
+                return false
+            }
 
         val nonce = solvePow(
             challengeRes.challenge,
@@ -351,7 +368,8 @@ class IdlixProvider : MainAPI() {
                 "origin" to mainUrl,
                 "referer" to mainUrl,
                 "user-agent" to USER_AGENT,
-            )
+            ),
+            interceptor = cloudflareInterceptor
         ).text
 
         val json = JSONObject(solveRes)
@@ -362,15 +380,66 @@ class IdlixProvider : MainAPI() {
             else -> null
         } ?: return false
 
-        val iframeurl = WebViewResolver(
-            interceptUrl = Regex("""/video/"""),
-            additionalUrls = listOf(Regex("""/video/""")),
+        val embedPageUrl = when {
+            embedUrl.startsWith("http", ignoreCase = true) -> embedUrl
+            embedUrl.startsWith("/") -> "$mainUrl$embedUrl"
+            else -> "$mainUrl/$embedUrl"
+        }
+
+        val resolver = WebViewResolver(
+            interceptUrl = Regex(
+                """https?://[^"'\\s]+(?:\.m3u8|\.mp4|/video/|/player/|/embed/|/play/)[^"'\\s]*""",
+                RegexOption.IGNORE_CASE
+            ),
+            additionalUrls = listOf(
+                Regex("""https?://[^"'\\s]+\.m3u8[^"'\\s]*""", RegexOption.IGNORE_CASE),
+                Regex("""https?://[^"'\\s]+\.mp4[^"'\\s]*""", RegexOption.IGNORE_CASE),
+                Regex(""".*/video/.*""", RegexOption.IGNORE_CASE),
+                Regex(""".*/player/.*""", RegexOption.IGNORE_CASE),
+                Regex(""".*/embed/.*""", RegexOption.IGNORE_CASE),
+                Regex(""".*/play/.*""", RegexOption.IGNORE_CASE),
+            ),
             useOkhttp = false,
-            timeout = 15_000L
+            timeout = 20_000L
         )
 
-        val finalUrl = app.get("$mainUrl${embedUrl}", interceptor = iframeurl).url
-        loadExtractor(finalUrl, mainUrl, subtitleCallback, callback)
+        val resolvedUrl = app.get(embedPageUrl, referer = mainUrl, interceptor = resolver)
+            .url
+            .substringBefore('#')
+
+        when {
+            resolvedUrl.contains(".m3u8", ignoreCase = true) -> {
+                generateM3u8(name, resolvedUrl, embedPageUrl).forEach(callback)
+                return true
+            }
+
+            resolvedUrl.contains(".mp4", ignoreCase = true) -> {
+                callback(
+                    newExtractorLink(
+                        source = name,
+                        name = "$name Auto",
+                        url = resolvedUrl,
+                    ) {
+                        referer = embedPageUrl
+                    }
+                )
+                return true
+            }
+        }
+
+        // Fallback kalau WebView tidak menemukan URL media / pattern redirect berubah.
+        if (resolvedUrl == embedPageUrl || resolvedUrl.startsWith(mainUrl, ignoreCase = true)) {
+            val doc = app.get(embedPageUrl, referer = mainUrl, interceptor = cloudflareInterceptor).document
+            val iframeSrc = doc.selectFirst("iframe[src]")?.attr("abs:src")?.trim().orEmpty()
+            val sourceSrc = doc.selectFirst("video source[src], source[src]")?.attr("abs:src")?.trim().orEmpty()
+            val picked = listOf(iframeSrc, sourceSrc).firstOrNull { it.startsWith("http", ignoreCase = true) }
+            if (picked != null) {
+                loadExtractor(picked, embedPageUrl, subtitleCallback, callback)
+                return true
+            }
+        }
+
+        loadExtractor(resolvedUrl, embedPageUrl, subtitleCallback, callback)
         return true
     }
 
