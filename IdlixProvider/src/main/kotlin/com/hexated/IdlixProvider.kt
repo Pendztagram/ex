@@ -44,6 +44,10 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.security.MessageDigest
 import java.text.Normalizer
+import java.util.Base64
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 class IdlixProvider : MainAPI() {
     override var mainUrl = base64Decode("aHR0cHM6Ly96MS5pZGxpeGt1LmNvbQ==")
@@ -372,13 +376,7 @@ class IdlixProvider : MainAPI() {
             interceptor = cloudflareInterceptor
         ).text
 
-        val json = JSONObject(solveRes)
-
-        val embedUrl = when {
-            json.has("embedUrl") -> json.optString("embedUrl")
-            json.has("url") -> json.optString("url")
-            else -> null
-        } ?: return false
+        val embedUrl = extractUrlFromSolveResponse(solveRes) ?: return false
 
         val embedPageUrl = when {
             embedUrl.startsWith("http", ignoreCase = true) -> embedUrl
@@ -388,16 +386,13 @@ class IdlixProvider : MainAPI() {
 
         val resolver = WebViewResolver(
             interceptUrl = Regex(
-                """https?://[^"'\\s]+(?:\.m3u8|\.mp4|/video/|/player/|/embed/|/play/)[^"'\\s]*""",
+                """https?://[^"'\\s]+(?:\.m3u8|\.mp4)[^"'\\s]*""",
                 RegexOption.IGNORE_CASE
             ),
             additionalUrls = listOf(
                 Regex("""https?://[^"'\\s]+\.m3u8[^"'\\s]*""", RegexOption.IGNORE_CASE),
                 Regex("""https?://[^"'\\s]+\.mp4[^"'\\s]*""", RegexOption.IGNORE_CASE),
-                Regex(""".*/video/.*""", RegexOption.IGNORE_CASE),
-                Regex(""".*/player/.*""", RegexOption.IGNORE_CASE),
-                Regex(""".*/embed/.*""", RegexOption.IGNORE_CASE),
-                Regex(""".*/play/.*""", RegexOption.IGNORE_CASE),
+                Regex("""https?://(?:[a-z0-9-]+\.)*(?:majorplay\.net|jeniusplay\.com)[^"'\\s]*""", RegexOption.IGNORE_CASE),
             ),
             useOkhttp = false,
             timeout = 20_000L
@@ -429,10 +424,18 @@ class IdlixProvider : MainAPI() {
 
         // Fallback kalau WebView tidak menemukan URL media / pattern redirect berubah.
         if (resolvedUrl == embedPageUrl || resolvedUrl.startsWith(mainUrl, ignoreCase = true)) {
-            val doc = app.get(embedPageUrl, referer = mainUrl, interceptor = cloudflareInterceptor).document
+            val embedRes = app.get(embedPageUrl, referer = mainUrl, interceptor = cloudflareInterceptor)
+            val doc = embedRes.document
             val iframeSrc = doc.selectFirst("iframe[src]")?.attr("abs:src")?.trim().orEmpty()
             val sourceSrc = doc.selectFirst("video source[src], source[src]")?.attr("abs:src")?.trim().orEmpty()
-            val picked = listOf(iframeSrc, sourceSrc).firstOrNull { it.startsWith("http", ignoreCase = true) }
+            val scriptUrl = Regex("""https?://(?:[a-z0-9-]+\.)*(?:majorplay\.net|jeniusplay\.com|[a-z0-9.-]+/(?:embed|player|video|play))[^"'\\s]*""", RegexOption.IGNORE_CASE)
+                .find(doc.select("script").joinToString("\n") { it.data() })
+                ?.value
+                ?.trim()
+                .orEmpty()
+            val decryptedSrc = decryptEmbeddedUrl(embedRes.text).orEmpty()
+            val picked = listOf(decryptedSrc, iframeSrc, sourceSrc, scriptUrl)
+                .firstOrNull { it.startsWith("http", ignoreCase = true) }
             if (picked != null) {
                 loadExtractor(picked, embedPageUrl, subtitleCallback, callback)
                 return true
@@ -461,6 +464,66 @@ class IdlixProvider : MainAPI() {
     fun sha256(input: String): String {
         val bytes = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
         return bytes.joinToString("") { "%02x".format(it) }
+    }
+
+    private fun extractUrlFromSolveResponse(raw: String): String? {
+        val trimmed = raw.trim()
+        if (trimmed.startsWith("http", ignoreCase = true)) return trimmed
+
+        val normalized = trimmed.replace("\\/", "/")
+        val direct = Regex("""https?://[^"'\\s]+""", RegexOption.IGNORE_CASE).find(normalized)?.value
+        if (!direct.isNullOrBlank()) return direct
+
+        val json = runCatching { JSONObject(trimmed) }.getOrNull() ?: return null
+        val candidates = listOf(
+            json.optString("embedUrl"),
+            json.optString("url"),
+            json.optString("streamUrl"),
+            json.optString("playbackUrl"),
+            json.optJSONObject("data")?.optString("embedUrl"),
+            json.optJSONObject("data")?.optString("url"),
+            json.optJSONObject("result")?.optString("embedUrl"),
+            json.optJSONObject("result")?.optString("url"),
+        )
+        return candidates.firstOrNull { !it.isNullOrBlank() }
+    }
+
+    private fun decryptEmbeddedUrl(html: String): String? {
+        val dataA = Regex("""data-a=["']([a-fA-F0-9]{32})["']""").find(html)?.groupValues?.getOrNull(1)
+        val dataP = Regex("""data-p=["']([^"']+)["']""").find(html)?.groupValues?.getOrNull(1)
+        val dataV = Regex("""data-v=["']([^"']+)["']""").find(html)?.groupValues?.getOrNull(1)
+        val cssSecret = Regex("""--_[a-z0-9]+:\s*["']([a-fA-F0-9]{32})["']""", RegexOption.IGNORE_CASE)
+            .find(html)
+            ?.groupValues
+            ?.getOrNull(1)
+
+        if (dataA.isNullOrBlank() || dataP.isNullOrBlank() || dataV.isNullOrBlank() || cssSecret.isNullOrBlank()) {
+            return null
+        }
+
+        val keyHex = dataA + cssSecret
+        val keyBytes = runCatching { hexToBytes(keyHex) }.getOrNull() ?: return null
+        val cipherBytes = runCatching { Base64.getDecoder().decode(dataP) }.getOrNull() ?: return null
+        val ivBytes = runCatching { Base64.getDecoder().decode(dataV) }.getOrNull() ?: return null
+
+        val plain = runCatching {
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(
+                Cipher.DECRYPT_MODE,
+                SecretKeySpec(keyBytes, "AES"),
+                GCMParameterSpec(128, ivBytes)
+            )
+            String(cipher.doFinal(cipherBytes))
+        }.getOrNull() ?: return null
+
+        return plain.trim().takeIf { it.startsWith("http", ignoreCase = true) }
+    }
+
+    private fun hexToBytes(hex: String): ByteArray {
+        require(hex.length % 2 == 0)
+        return ByteArray(hex.length / 2) { index ->
+            hex.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+        }
     }
 }
 

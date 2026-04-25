@@ -114,7 +114,16 @@ class Majorplay : ExtractorApi() {
         }.getOrNull() ?: run {
             val doc = runCatching { app.get(url, referer = referer, interceptor = cloudflareInterceptor).document }.getOrNull()
             val src = doc?.selectFirst("video source[src], source[src]")?.attr("abs:src")?.trim().orEmpty()
-            src.takeIf { it.startsWith("http", ignoreCase = true) }
+            val scriptData = doc?.select("script")?.joinToString("\n") { it.data() }.orEmpty()
+            val hlsFromScript = Regex("""["']hlsUrl["']\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE)
+                .find(scriptData)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.replace("\\/", "/")
+                ?.trim()
+                .orEmpty()
+
+            listOf(src, hlsFromScript).firstOrNull { it.startsWith("http", ignoreCase = true) }
         } ?: return
 
         if (resolvedUrl.contains(".m3u8", ignoreCase = true)) {
