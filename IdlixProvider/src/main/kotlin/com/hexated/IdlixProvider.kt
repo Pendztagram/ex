@@ -321,6 +321,7 @@ class IdlixProvider : MainAPI() {
             .find(aclrRes)
             ?.groupValues?.getOrNull(1)
 
+        Log.d(name, "Idlix aclr: ${aclr ?: "null"}")
 
         val challengejson = """
 {
@@ -344,9 +345,11 @@ class IdlixProvider : MainAPI() {
             interceptor = cloudflareInterceptor
         ).text
 
+        Log.d(name, "Idlix challengeText: ${challengeText.take(300)}")
+
         val challengeRes = AppUtils.tryParseJson<ChallengeResponse>(challengeText)
             ?: run {
-                Log.d(name, "Idlix challenge parse failed: ${challengeText.take(200)}")
+                Log.d(name, "Idlix challenge parse failed: ${challengeText.take(300)}")
                 return false
             }
 
@@ -376,7 +379,14 @@ class IdlixProvider : MainAPI() {
             interceptor = cloudflareInterceptor
         ).text
 
-        val embedUrl = extractUrlFromSolveResponse(solveRes) ?: return false
+        Log.d(name, "Idlix solveRes: ${solveRes.take(300)}")
+
+        val embedUrl = extractUrlFromSolveResponse(solveRes) ?: run {
+            Log.d(name, "Idlix extractUrlFromSolveResponse failed")
+            return false
+        }
+
+        Log.d(name, "Idlix embedUrl: $embedUrl")
 
         val embedPageUrl = when {
             embedUrl.startsWith("http", ignoreCase = true) -> embedUrl
@@ -386,13 +396,13 @@ class IdlixProvider : MainAPI() {
 
         val resolver = WebViewResolver(
             interceptUrl = Regex(
-                """https?://[^"'\\s]+(?:\.m3u8|\.mp4)[^"'\\s]*""",
+                """https?://[^"'\s]+(?:\.m3u8|\.mp4)[^"'\s]*""",
                 RegexOption.IGNORE_CASE
             ),
             additionalUrls = listOf(
-                Regex("""https?://[^"'\\s]+\.m3u8[^"'\\s]*""", RegexOption.IGNORE_CASE),
-                Regex("""https?://[^"'\\s]+\.mp4[^"'\\s]*""", RegexOption.IGNORE_CASE),
-                Regex("""https?://(?:[a-z0-9-]+\.)*(?:majorplay\.net|jeniusplay\.com)[^"'\\s]*""", RegexOption.IGNORE_CASE),
+                Regex("""https?://[^"'\s]+\.m3u8[^"'\s]*""", RegexOption.IGNORE_CASE),
+                Regex("""https?://[^"'\s]+\.mp4[^"'\s]*""", RegexOption.IGNORE_CASE),
+                Regex("""https?://(?:[a-z0-9-]+\.)*(?:majorplay\.net|jeniusplay\.com)[^"'\s]*""", RegexOption.IGNORE_CASE),
             ),
             useOkhttp = false,
             timeout = 20_000L
@@ -401,6 +411,9 @@ class IdlixProvider : MainAPI() {
         val resolvedUrl = app.get(embedPageUrl, referer = mainUrl, interceptor = resolver)
             .url
             .substringBefore('#')
+
+        Log.d(name, "Idlix embedPageUrl: $embedPageUrl")
+        Log.d(name, "Idlix resolvedUrl: $resolvedUrl")
 
         when {
             resolvedUrl.contains(".m3u8", ignoreCase = true) -> {
@@ -426,15 +439,30 @@ class IdlixProvider : MainAPI() {
         if (resolvedUrl == embedPageUrl || resolvedUrl.startsWith(mainUrl, ignoreCase = true)) {
             val embedRes = app.get(embedPageUrl, referer = mainUrl, interceptor = cloudflareInterceptor)
             val doc = embedRes.document
+            val html = embedRes.text
+
             val iframeSrc = doc.selectFirst("iframe[src]")?.attr("abs:src")?.trim().orEmpty()
+            val iframeDataSrc = doc.selectFirst("iframe[data-src]")?.attr("abs:data-src")?.trim().orEmpty()
             val sourceSrc = doc.selectFirst("video source[src], source[src]")?.attr("abs:src")?.trim().orEmpty()
-            val scriptUrl = Regex("""https?://(?:[a-z0-9-]+\.)*(?:majorplay\.net|jeniusplay\.com|[a-z0-9.-]+/(?:embed|player|video|play))[^"'\\s]*""", RegexOption.IGNORE_CASE)
-                .find(doc.select("script").joinToString("\n") { it.data() })
+            val videoSrc = doc.selectFirst("video[src]")?.attr("abs:src")?.trim().orEmpty()
+
+            val scriptData = doc.select("script").joinToString("\n") { it.data() }
+            val scriptUrl = Regex("""https?://(?:[a-z0-9-]+\.)*(?:majorplay\.net|jeniusplay\.com|[a-z0-9.-]+/(?:embed|player|video|play|e|v|watch))[^"'\s]*""", RegexOption.IGNORE_CASE)
+                .find(scriptData)
                 ?.value
                 ?.trim()
                 .orEmpty()
-            val decryptedSrc = decryptEmbeddedUrl(embedRes.text).orEmpty()
-            val picked = listOf(decryptedSrc, iframeSrc, sourceSrc, scriptUrl)
+
+            val m3u8FromScript = Regex("""https?://[^"'\s]+\.m3u8[^"'\s]*""", RegexOption.IGNORE_CASE)
+                .find(scriptData)?.value.orEmpty()
+            val mp4FromScript = Regex("""https?://[^"'\s]+\.mp4[^"'\s]*""", RegexOption.IGNORE_CASE)
+                .find(scriptData)?.value.orEmpty()
+
+            val decryptedSrc = decryptEmbeddedUrl(html).orEmpty()
+
+            Log.d(name, "Idlix fallback iframeSrc=$iframeSrc iframeDataSrc=$iframeDataSrc sourceSrc=$sourceSrc videoSrc=$videoSrc scriptUrl=$scriptUrl decrypted=${decryptedSrc.isNotBlank()} m3u8Script=${m3u8FromScript.isNotBlank()} mp4Script=${mp4FromScript.isNotBlank()}")
+
+            val picked = listOf(decryptedSrc, iframeSrc, iframeDataSrc, sourceSrc, videoSrc, scriptUrl, m3u8FromScript, mp4FromScript)
                 .firstOrNull { it.startsWith("http", ignoreCase = true) }
             if (picked != null) {
                 if (emitDirectMediaLinks(picked, embedPageUrl, callback)) {
@@ -477,22 +505,46 @@ class IdlixProvider : MainAPI() {
         val trimmed = raw.trim()
         if (trimmed.startsWith("http", ignoreCase = true)) return trimmed
 
+        // URL inside quotes
+        Regex("""""'(https?://[^""']+)""'""", RegexOption.IGNORE_CASE).find(trimmed)?.groupValues?.getOrNull(1)?.let { return it }
+        // Relative path inside quotes
+        Regex("""""'(/(?:embed|player|video|play|e|v|watch)[^""']*)""'""", RegexOption.IGNORE_CASE).find(trimmed)?.groupValues?.getOrNull(1)?.let { return it }
+
         val normalized = trimmed.replace("\\/", "/")
-        val direct = Regex("""https?://[^"'\\s]+""", RegexOption.IGNORE_CASE).find(normalized)?.value
+        val direct = Regex("""https?://[^""'\s]+""", RegexOption.IGNORE_CASE).find(normalized)?.value
         if (!direct.isNullOrBlank()) return direct
 
         val json = runCatching { JSONObject(trimmed) }.getOrNull() ?: return null
-        val candidates = listOf(
-            json.optString("embedUrl"),
-            json.optString("url"),
-            json.optString("streamUrl"),
-            json.optString("playbackUrl"),
-            json.optJSONObject("data")?.optString("embedUrl"),
-            json.optJSONObject("data")?.optString("url"),
-            json.optJSONObject("result")?.optString("embedUrl"),
-            json.optJSONObject("result")?.optString("url"),
-        )
-        return candidates.firstOrNull { !it.isNullOrBlank() }
+
+        // Recursive search for any URL-like string inside JSON
+        fun findUrl(obj: Any?): String? {
+            when (obj) {
+                is String -> {
+                    if (obj.startsWith("http", ignoreCase = true) || obj.startsWith("/")) return obj
+                }
+                is JSONObject -> {
+                    val keys = obj.keys()
+                    // First pass: known keys
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        if (key.equals("embedUrl", true) || key.equals("url", true) ||
+                            key.equals("streamUrl", true) || key.equals("playbackUrl", true) ||
+                            key.equals("src", true) || key.equals("file", true) || key.equals("link", true) ||
+                            key.equals("embed", true) || key.equals("source", true) || key.equals("video", true)) {
+                            findUrl(obj.get(key))?.let { return it }
+                        }
+                    }
+                    // Second pass: any key
+                    val keys2 = obj.keys()
+                    while (keys2.hasNext()) {
+                        findUrl(obj.get(keys2.next()))?.let { return it }
+                    }
+                }
+            }
+            return null
+        }
+
+        return findUrl(json)
     }
 
     private fun decryptEmbeddedUrl(html: String): String? {
@@ -559,28 +611,33 @@ class IdlixProvider : MainAPI() {
             return true
         }
 
-        val isMajorplayEmbed = Regex("""https?://(?:[a-z0-9-]+\.)*majorplay\.net/embed/""", RegexOption.IGNORE_CASE)
+        val isKnownEmbed = Regex("""https?://(?:[a-z0-9-]+\.)*(?:majorplay\.net|jeniusplay\.com|stream|player|embed)/""", RegexOption.IGNORE_CASE)
             .containsMatchIn(cleaned)
-        if (!isMajorplayEmbed) return false
+        if (!isKnownEmbed) return false
 
         val doc = runCatching {
             app.get(cleaned, referer = refererUrl, interceptor = cloudflareInterceptor).document
         }.getOrNull() ?: return false
 
         val sourceSrc = doc.selectFirst("video source[src], source[src]")?.attr("abs:src")?.trim().orEmpty()
+        val videoSrc = doc.selectFirst("video[src]")?.attr("abs:src")?.trim().orEmpty()
         val scriptData = doc.select("script").joinToString("\n") { it.data() }
-        val hlsFromScript = Regex(
-            """["']hlsUrl["']\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']""",
-            RegexOption.IGNORE_CASE
-        )
-            .find(scriptData)
-            ?.groupValues
-            ?.getOrNull(1)
-            ?.replace("\\/", "/")
-            ?.trim()
-            .orEmpty()
 
-        val streamUrl = listOf(sourceSrc, hlsFromScript).firstOrNull { it.startsWith("http", ignoreCase = true) }
+        val patterns = listOf(
+            Regex("""["']hlsUrl["']\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE),
+            Regex("""["']file["']\s*:\s*["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""", RegexOption.IGNORE_CASE),
+            Regex("""["']src["']\s*:\s*["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""", RegexOption.IGNORE_CASE),
+            Regex("""["']url["']\s*:\s*["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""", RegexOption.IGNORE_CASE),
+            Regex("""sources\s*:\s*\[\s*\{[^}]*["']file["']\s*:\s*["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""", RegexOption.IGNORE_CASE),
+            Regex("""https?://[^"'\s]+\.m3u8[^"'\s]*""", RegexOption.IGNORE_CASE),
+            Regex("""https?://[^"'\s]+\.mp4[^"'\s]*""", RegexOption.IGNORE_CASE),
+        )
+
+        val scriptUrl = patterns.firstNotNullOfOrNull { regex ->
+            regex.find(scriptData)?.groupValues?.getOrNull(1)?.trim()
+        } ?: ""
+
+        val streamUrl = listOf(sourceSrc, videoSrc, scriptUrl).firstOrNull { it.startsWith("http", ignoreCase = true) }
             ?: return false
 
         return if (streamUrl.contains(".m3u8", ignoreCase = true)) {
@@ -637,3 +694,4 @@ fun getSearchQuality(check: String?): SearchQuality? {
     for ((regex, quality) in patterns) if (regex.containsMatchIn(u)) return quality
     return null
 }
+

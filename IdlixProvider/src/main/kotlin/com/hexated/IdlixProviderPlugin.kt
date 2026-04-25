@@ -9,5 +9,6 @@ class IdlixProviderPlugin : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(IdlixProvider())
         registerExtractorAPI(Jeniusplay())
+        registerExtractorAPI(Majorplay())
     }
 }

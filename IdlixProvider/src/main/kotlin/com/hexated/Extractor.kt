@@ -92,7 +92,7 @@ class Majorplay : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         val mediaRegex = Regex(
-            """https?://[^"'\\s]+(?:\.m3u8|\.mp4)[^"'\\s]*""",
+            """https?://[^"'\s]+(?:\.m3u8|\.mp4)[^"'\s]*""",
             RegexOption.IGNORE_CASE
         )
 
@@ -103,9 +103,10 @@ class Majorplay : ExtractorApi() {
                 interceptor = WebViewResolver(
                     interceptUrl = mediaRegex,
                     additionalUrls = listOf(
-                        Regex("""https?://[^"'\\s]+mime=video(?:%2F|/)mp4[^"'\\s]*""", RegexOption.IGNORE_CASE),
-                        Regex("""https?://[^"'\\s]+\.m3u8[^"'\\s]*""", RegexOption.IGNORE_CASE),
-                        Regex("""https?://[^"'\\s]+\.mp4[^"'\\s]*""", RegexOption.IGNORE_CASE),
+                        Regex("""https?://[^"'\s]+mime=video(?:%2F|/)mp4[^"'\s]*""", RegexOption.IGNORE_CASE),
+                        Regex("""https?://[^"'\s]+\.m3u8[^"'\s]*""", RegexOption.IGNORE_CASE),
+                        Regex("""https?://[^"'\s]+\.mp4[^"'\s]*""", RegexOption.IGNORE_CASE),
+                        Regex("""https?://[^"'\s]+\.txt[^"'\s]*""", RegexOption.IGNORE_CASE),
                     ),
                     useOkhttp = false,
                     timeout = 20_000L
@@ -114,20 +115,38 @@ class Majorplay : ExtractorApi() {
         }.getOrNull() ?: run {
             val doc = runCatching { app.get(url, referer = referer, interceptor = cloudflareInterceptor).document }.getOrNull()
             val src = doc?.selectFirst("video source[src], source[src]")?.attr("abs:src")?.trim().orEmpty()
+            val videoSrc = doc?.selectFirst("video[src]")?.attr("abs:src")?.trim().orEmpty()
             val scriptData = doc?.select("script")?.joinToString("\n") { it.data() }.orEmpty()
-            val hlsFromScript = Regex("""["']hlsUrl["']\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE)
-                .find(scriptData)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?.replace("\\/", "/")
-                ?.trim()
-                .orEmpty()
 
-            listOf(src, hlsFromScript).firstOrNull { it.startsWith("http", ignoreCase = true) }
+            val patterns = listOf(
+                Regex("""["']hlsUrl["']\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE),
+                Regex("""["']file["']\s*:\s*["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""", RegexOption.IGNORE_CASE),
+                Regex("""["']src["']\s*:\s*["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""", RegexOption.IGNORE_CASE),
+                Regex("""["']url["']\s*:\s*["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""", RegexOption.IGNORE_CASE),
+                Regex("""sources\s*:\s*\[\s*\{[^}]*["']file["']\s*:\s*["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""", RegexOption.IGNORE_CASE),
+                Regex("""https?://[^"'\s]+\.m3u8[^"'\s]*""", RegexOption.IGNORE_CASE),
+                Regex("""https?://[^"'\s]+\.mp4[^"'\s]*""", RegexOption.IGNORE_CASE),
+                Regex("""https?://[^"'\s]+\.txt[^"'\s]*""", RegexOption.IGNORE_CASE),
+            )
+
+            val scriptUrl = patterns.firstNotNullOfOrNull { regex ->
+                regex.find(scriptData)?.groupValues?.getOrNull(1)?.trim()
+            } ?: ""
+
+            listOf(src, videoSrc, scriptUrl).firstOrNull { it.startsWith("http", ignoreCase = true) }
         } ?: return
 
         if (resolvedUrl.contains(".m3u8", ignoreCase = true)) {
-            generateM3u8(name, resolvedUrl, url).forEach(callback)
+            generateM3u8(name, resolvedUrl, referer ?: url).forEach(callback)
+            return
+        }
+
+        if (resolvedUrl.contains(".mp4", ignoreCase = true) || resolvedUrl.contains(".txt", ignoreCase = true)) {
+            callback.invoke(
+                newExtractorLink(name, name, resolvedUrl, INFER_TYPE) {
+                    this.referer = referer ?: url
+                }
+            )
             return
         }
 
@@ -138,3 +157,4 @@ class Majorplay : ExtractorApi() {
         )
     }
 }
+
