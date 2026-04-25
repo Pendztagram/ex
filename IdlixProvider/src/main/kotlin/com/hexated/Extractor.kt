@@ -133,6 +133,50 @@ class Majorplay : ExtractorApi() {
                 regex.find(scriptData)?.groupValues?.getOrNull(1)?.trim()
             } ?: ""
 
+            // Extract subtitles from packed script (same pattern as Jeniusplay)
+            doc?.select("script")?.forEach { script ->
+                if (script.data().contains("eval(function(p,a,c,k,e,d)")) {
+                    val unpacked = getAndUnpack(script.data())
+                    val subData = unpacked.substringAfter("\"tracks\":[", "").substringBefore("],", "")
+                    if (subData.isNotBlank()) {
+                        AppUtils.tryParseJson<List<Tracks>>("[$subData]")?.map { subtitle ->
+                            subtitleCallback.invoke(
+                                newSubtitleFile(
+                                    getLanguage(subtitle.label ?: ""),
+                                    subtitle.file
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Extract subtitles from HTML track elements
+            doc?.select("track[kind=captions], track[kind=subtitles]")?.forEach { track ->
+                val subSrc = track.attr("abs:src").trim().takeIf { it.isNotBlank() } ?: return@forEach
+                val subLabel = track.attr("label").trim().takeIf { it.isNotBlank() } ?: track.attr("srclang").trim()
+                subtitleCallback.invoke(
+                    newSubtitleFile(
+                        getLanguage(subLabel),
+                        subSrc
+                    )
+                )
+            }
+
+            // Extract subtitles from script direct URLs (.vtt, .srt, .ass)
+            Regex("""https?://[^"'\s]+\.(?:vtt|srt|ass)(?:\?[^"'\s]*)?""", RegexOption.IGNORE_CASE)
+                .findAll(scriptData)
+                .map { it.value }
+                .distinct()
+                .forEach { subUrl ->
+                    subtitleCallback.invoke(
+                        newSubtitleFile(
+                            getLanguage(""),
+                            subUrl
+                        )
+                    )
+                }
+
             listOf(src, videoSrc, scriptUrl).firstOrNull { it.startsWith("http", ignoreCase = true) }
         } ?: return
 
@@ -155,6 +199,20 @@ class Majorplay : ExtractorApi() {
                 this.referer = referer ?: url
             }
         )
+    }
+
+    data class Tracks(
+        @JsonProperty("kind") val kind: String?,
+        @JsonProperty("file") val file: String,
+        @JsonProperty("label") val label: String?,
+    )
+
+    private fun getLanguage(str: String): String {
+        return when {
+            str.contains("indonesia", true) || str.contains("bahasa", true) || str.contains("indonesian", true) -> "Indonesian"
+            str.contains("english", true) -> "English"
+            else -> str.ifBlank { "Unknown" }
+        }
     }
 }
 
