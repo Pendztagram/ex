@@ -416,21 +416,56 @@ class IdlixProvider : MainAPI() {
         Log.d(name, "Idlix embedPageUrl: $embedPageUrl")
         Log.d(name, "Idlix resolvedUrl: $resolvedUrl")
 
-        // Check if this is a Majorplay/Jeniusplay embed - extract subtitles from embed page
+        // Check if this is a Majorplay/Jeniusplay embed
         val isMajorplayOrJeniusplay = resolvedUrl.contains("majorplay.net", ignoreCase = true) ||
                 resolvedUrl.contains("jeniusplay.com", ignoreCase = true) ||
                 embedPageUrl.contains("majorplay.net", ignoreCase = true) ||
                 embedPageUrl.contains("jeniusplay.com", ignoreCase = true)
 
         if (isMajorplayOrJeniusplay) {
-            // Fetch the embed page to extract subtitles
+            // Fetch the embed page to extract video URL and subtitles
             val embedRes = runCatching {
                 app.get(embedPageUrl, referer = mainUrl, interceptor = cloudflareInterceptor)
             }.getOrNull()
 
             if (embedRes != null) {
                 val html = embedRes.text
+                val doc = embedRes.document
+
+                // Extract subtitles
                 extractSubtitlesFromHtml(html, embedPageUrl, subtitleCallback)
+
+                // Try to find m3u8 URL from HTML source tag
+                val sourceM3u8 = doc.selectFirst("source[type='application/x-mpegurl'], source[src*='.m3u8']")?.attr("abs:src")
+                if (!sourceM3u8.isNullOrBlank()) {
+                    generateM3u8(name, sourceM3u8, embedPageUrl).forEach(callback)
+                    return true
+                }
+
+                // Try to find m3u8 from initialToken JSON in HTML
+                val hlsUrlRegex = Regex(""""hlsUrl"\s*:\s*"(https?://[^"']+\.m3u8[^"']*)"""", RegexOption.IGNORE_CASE)
+                val hlsUrlFromToken = hlsUrlRegex.find(html)?.groupValues?.getOrNull(1)
+                if (!hlsUrlFromToken.isNullOrBlank()) {
+                    generateM3u8(name, hlsUrlFromToken, embedPageUrl).forEach(callback)
+                    return true
+                }
+
+                // Try to find any m3u8 URL in the HTML
+                val anyM3u8 = Regex("""https?://[^"'\s]+\.m3u8[^"'\s]*""", RegexOption.IGNORE_CASE).find(html)?.value
+                if (!anyM3u8.isNullOrBlank()) {
+                    generateM3u8(name, anyM3u8, embedPageUrl).forEach(callback)
+                    return true
+                }
+
+                // If we have a resolvedUrl that's m3u8, use it
+                if (resolvedUrl.contains(".m3u8", ignoreCase = true)) {
+                    generateM3u8(name, resolvedUrl, embedPageUrl).forEach(callback)
+                    return true
+                }
+
+                // Fallback: let Majorplay extractor handle it
+                loadExtractor(embedPageUrl, mainUrl, subtitleCallback, callback)
+                return true
             }
         }
 
