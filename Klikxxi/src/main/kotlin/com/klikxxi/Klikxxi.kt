@@ -546,6 +546,7 @@ class Klikxxi : MainAPI() {
                 ?.substringBefore(" ")
                 ?.trim()
                 ?.takeIf(::isValidPosterCandidate)
+                ?.fixImageQuality()
                 ?.let(::fixUrl)
                 ?.let(::normalizePosterUrl)
         }
@@ -598,17 +599,21 @@ class Klikxxi : MainAPI() {
         return this.replace(regex, "")
     }
 
-private fun posterHeaders(url: String): Map<String, String> {
+    private fun posterHeaders(url: String): Map<String, String> {
         val userAgent = defaultHeaders["User-Agent"].orEmpty()
-        val cookie = cfCookieHeader.orEmpty()
+        val posterHost = runCatching { URI(url).host }.getOrDefault("")
+        val mainHost = runCatching { URI(mainUrl).host }.getOrDefault("")
+        val sameHost = posterHost.equals(mainHost, ignoreCase = true)
         return buildMap {
             put("Referer", mainUrl)
             if (userAgent.isNotBlank()) put("User-Agent", userAgent)
-            if (cookie.isNotBlank()) put("Cookie", cookie)
+            if (sameHost) {
+                cfCookieHeader?.takeIf { it.isNotBlank() }?.let { put("Cookie", it) }
+            }
         }
     }
 
-private fun normalizePosterUrl(url: String): String {
+    private fun normalizePosterUrl(url: String): String {
         return url.replace("&amp;", "&").trim()
     }
 
