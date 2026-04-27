@@ -48,7 +48,7 @@ import kotlin.math.roundToInt
 
 
 open class SoraStream(val sharedPref: SharedPreferences? = null) : TmdbProvider() {
-    override var name = "SoraStream"
+    override var name = "SoraStream🤠"
     override val hasMainPage = true
     override val instantLinkLoading = true
     override val useMetaLoadResponse = true
