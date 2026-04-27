@@ -587,10 +587,10 @@
     },
     {
         "iconUrl": "https://www.google.com/s2/favicons?domain=tv7.lk21.am.in&sz=%size%",
-        "fileHash": "sha256-090336ba0cbfce3bd51ff8c92ea37bf5bb27f5c8ec9ff60049af963fe09447df",
+        "fileHash": "sha256-4a00a19730ea530370746662a33ccd06b2bc3b3aeef46647d0548390db031c20",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 23136,
+        "fileSize": 31369,
         "status": 1,
         "language": "id",
         "authors": [
@@ -911,10 +911,10 @@
     },
     {
         "iconUrl": "https://github.com/duro92/ExtCloud/blob/main/SoraStream/Icon.png",
-        "fileHash": "sha256-e474c89f49182e04b0eb3f7dd2a60ac6f23ebe84924d81dde4bc069ab38644f4",
+        "fileHash": "sha256-6c5e86e35364dc88a677ec1175f78d94721c0b39a6390b0be00df37689fa3e35",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 243668,
+        "fileSize": 243752,
         "status": 1,
         "language": "en",
         "authors": [
