@@ -102,8 +102,8 @@ class Turbovidhls : Filesim() {
     override var mainUrl = "https://turbovidhls.com"
 }
 
-class F16px : ByseBase() {
-    override var name = "F16px"
+class ByseSayeveum : ByseBase() {
+    override var name = "Byse"
     override var mainUrl = "https://f16px.com"
 }
 
