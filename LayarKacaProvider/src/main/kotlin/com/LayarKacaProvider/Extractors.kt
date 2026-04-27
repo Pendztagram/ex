@@ -107,7 +107,7 @@ class ByseSayeveum : ByseBase() {
     override var mainUrl = "https://f16px.com"
 }
 
-class ByseBase : ExtractorApi() {
+open class ByseBase : ExtractorApi() {
     override var name = "Byse"
     override var mainUrl = "https://byse.sx"
     override val requiresReferer = true
