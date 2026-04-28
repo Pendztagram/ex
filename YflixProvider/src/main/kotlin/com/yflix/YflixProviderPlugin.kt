@@ -1,12 +1,12 @@
-package com.drakorid
+package com.yflix
 
 import android.content.Context
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
 
 @CloudstreamPlugin
-class DrakoridProviderPlugin : Plugin() {
+class YflixProviderPlugin : Plugin() {
     override fun load(context: Context) {
-        registerMainAPI(DrakoridProvider())
+        registerMainAPI(YflixProvider())
     }
 }
