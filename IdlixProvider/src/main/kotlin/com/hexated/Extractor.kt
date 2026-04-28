@@ -1,24 +1,20 @@
 package com.hexated
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.network.CloudflareKiller
-import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.AppUtils
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.M3u8Helper.Companion.generateM3u8
 import com.lagradost.cloudstream3.utils.getAndUnpack
-import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class Jeniusplay : ExtractorApi() {
     override var name = "Jeniusplay"
     override var mainUrl = "https://jeniusplay.com"
     override val requiresReferer = true
-    private val cloudflareInterceptor by lazy { CloudflareKiller() }
 
     override suspend fun getUrl(
         url: String,
@@ -26,19 +22,17 @@ class Jeniusplay : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val document = app.get(url, referer = referer, interceptor = cloudflareInterceptor).document
+        val document = app.get(url, referer = referer).document
         val hash = url.split("/").last().substringAfter("data=")
 
         val m3uLink = app.post(
             url = "$mainUrl/player/index.php?data=$hash&do=getVideo",
             data = mapOf("hash" to hash, "r" to "$referer"),
             referer = referer,
-            headers = mapOf("X-Requested-With" to "XMLHttpRequest"),
-            interceptor = cloudflareInterceptor
-        ).parsed<ResponseSource>().videoSource.replace(".txt", ".m3u8")
+            headers = mapOf("X-Requested-With" to "XMLHttpRequest")
+        ).parsed<ResponseSource>().videoSource.replace(".txt",".m3u8")
 
-        generateM3u8(
-            name,
+        generateM3u8(name,
             m3uLink,
             mainUrl,
         ).forEach(callback)
@@ -70,10 +64,10 @@ class Jeniusplay : ExtractorApi() {
         @JsonProperty("file") val file: String,
         @JsonProperty("label") val label: String?,
     )
-
     private fun getLanguage(str: String): String {
         return when {
-            str.contains("indonesia", true) || str.contains("bahasa", true) -> "Indonesian"
+            str.contains("indonesia", true) || str
+                .contains("bahasa", true) -> "Indonesian"
             else -> str
         }
     }
@@ -81,101 +75,8 @@ class Jeniusplay : ExtractorApi() {
 
 class Majorplay : ExtractorApi() {
     override var name = "Majorplay"
-    override var mainUrl = "https://majorplay.net"
+    override var mainUrl = "https://*.majorplay.net"
     override val requiresReferer = true
-    private val cloudflareInterceptor by lazy { CloudflareKiller() }
-
-    data class MajorplaySubtitle(
-        @JsonProperty("lang") val lang: String = "",
-        @JsonProperty("path") val path: String = "",
-        @JsonProperty("label") val label: String = ""
-    )
-
-    private suspend fun extractSubtitlesFromHtml(
-        html: String,
-        baseUrl: String,
-        subtitleCallback: (SubtitleFile) -> Unit
-    ) {
-        // Extract subtitles from JSON in script tags (Majorplay Next.js format)
-        val subtitleRegex = Regex(""""subtitles"\s*:\s*(\[.*?\])""", RegexOption.DOT_MATCHES_ALL)
-        subtitleRegex.findAll(html).forEach { match ->
-            val jsonArray = match.groupValues.getOrNull(1) ?: return@forEach
-            try {
-                val subtitles = AppUtils.tryParseJson<List<MajorplaySubtitle>>(jsonArray)
-                subtitles?.forEach { sub ->
-                    val subUrl = when {
-                        sub.path.startsWith("http", ignoreCase = true) -> sub.path
-                        sub.path.startsWith("/") -> baseUrl.substringBefore("/embed") + sub.path
-                        else -> "$baseUrl/${sub.path}"
-                    }
-                    val lang = when {
-                        sub.label.contains("indonesia", true) || sub.lang.contains("id", true) -> "Indonesian"
-                        sub.label.contains("english", true) || sub.lang.contains("en", true) -> "English"
-                        else -> sub.label.ifBlank { sub.lang.ifBlank { "Unknown" } }
-                    }
-                    subtitleCallback.invoke(
-                        newSubtitleFile(lang, subUrl)
-                    )
-                }
-            } catch (_: Exception) { }
-        }
-
-        // Extract from initialToken JSON format
-        val initialTokenRegex = Regex(""""initialToken"\s*:\s*\{.*?"subtitles"\s*:\s*(\[.*?\]).*?\}""", RegexOption.DOT_MATCHES_ALL)
-        initialTokenRegex.findAll(html).forEach { match ->
-            val jsonArray = match.groupValues.getOrNull(1) ?: return@forEach
-            try {
-                val subtitles = AppUtils.tryParseJson<List<MajorplaySubtitle>>(jsonArray)
-                subtitles?.forEach { sub ->
-                    val subUrl = when {
-                        sub.path.startsWith("http", ignoreCase = true) -> sub.path
-                        sub.path.startsWith("/") -> baseUrl.substringBefore("/embed") + sub.path
-                        else -> "$baseUrl/${sub.path}"
-                    }
-                    val lang = when {
-                        sub.label.contains("indonesia", true) || sub.lang.contains("id", true) -> "Indonesian"
-                        sub.label.contains("english", true) || sub.lang.contains("en", true) -> "English"
-                        else -> sub.label.ifBlank { sub.lang.ifBlank { "Unknown" } }
-                    }
-                    subtitleCallback.invoke(
-                        newSubtitleFile(lang, subUrl)
-                    )
-                }
-            } catch (_: Exception) { }
-        }
-
-        // Extract from HTML track elements
-        val trackRegex = Regex("""<track[^>]*kind=["']?(?:captions|subtitles)["']?[^>]*>""", RegexOption.IGNORE_CASE)
-        trackRegex.findAll(html).forEach { match ->
-            val trackTag = match.value
-            val srcMatch = Regex("""src=["']([^"']+)["']""").find(trackTag)
-            val labelMatch = Regex("""label=["']([^"']+)["']""").find(trackTag)
-            val srclangMatch = Regex("""srclang=["']([^"']+)["']""").find(trackTag)
-
-            val subUrl = srcMatch?.groupValues?.getOrNull(1) ?: return@forEach
-            val label = labelMatch?.groupValues?.getOrNull(1) ?: srclangMatch?.groupValues?.getOrNull(1) ?: ""
-            val lang = when {
-                label.contains("indonesia", true) -> "Indonesian"
-                label.contains("english", true) -> "English"
-                else -> label.ifBlank { "Unknown" }
-            }
-            val fullUrl = when {
-                subUrl.startsWith("http", ignoreCase = true) -> subUrl
-                subUrl.startsWith("/") -> baseUrl.substringBefore("/embed") + subUrl
-                else -> "$baseUrl/$subUrl"
-            }
-            subtitleCallback.invoke(newSubtitleFile(lang, fullUrl))
-        }
-
-        // Extract direct subtitle URLs (.vtt, .srt, .ass)
-        Regex("""https?://[^"'\s]+\.(?:vtt|srt|ass)(?:\?[^"'\s]*)?""", RegexOption.IGNORE_CASE)
-            .findAll(html)
-            .map { it.value }
-            .distinct()
-            .forEach { subUrl ->
-                subtitleCallback.invoke(newSubtitleFile("Unknown", subUrl))
-            }
-    }
 
     override suspend fun getUrl(
         url: String,
@@ -183,133 +84,27 @@ class Majorplay : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val mediaRegex = Regex(
-            """https?://[^"'\s]+(?:\.m3u8|\.mp4)[^"'\s]*""",
-            RegexOption.IGNORE_CASE
-        )
+        val document = app.get(url, referer = mainUrl).document
+        val m3uLink = document.select("source").attr("src")
+        Log.d(name, m3uLink.toString())
+        generateM3u8(name, m3uLink, mainUrl).forEach(callback)
 
-        val resolvedUrl = runCatching {
-            app.get(
-                url,
-                referer = referer,
-                interceptor = WebViewResolver(
-                    interceptUrl = mediaRegex,
-                    additionalUrls = listOf(
-                        Regex("""https?://[^"'\s]+mime=video(?:%2F|/)mp4[^"'\s]*""", RegexOption.IGNORE_CASE),
-                        Regex("""https?://[^"'\s]+\.m3u8[^"'\s]*""", RegexOption.IGNORE_CASE),
-                        Regex("""https?://[^"'\s]+\.mp4[^"'\s]*""", RegexOption.IGNORE_CASE),
-                        Regex("""https?://[^"'\s]+\.txt[^"'\s]*""", RegexOption.IGNORE_CASE),
-                    ),
-                    useOkhttp = false,
-                    timeout = 20_000L
-                )
-            ).url.substringBefore('#')
-        }.getOrNull() ?: run {
-            val doc = runCatching { app.get(url, referer = referer, interceptor = cloudflareInterceptor).document }.getOrNull()
-            val html = doc?.html().orEmpty()
-            
-            // Extract subtitles from HTML embed page (Majorplay Next.js format)
-            extractSubtitlesFromHtml(html, url, subtitleCallback)
-            
-            val src = doc?.selectFirst("video source[src], source[src]")?.attr("abs:src")?.trim().orEmpty()
-            val videoSrc = doc?.selectFirst("video[src]")?.attr("abs:src")?.trim().orEmpty()
-            val scriptData = doc?.select("script")?.joinToString("\n") { it.data() }.orEmpty()
+        val scripts = document.selectFirst("script:containsData(subtitles)")?.data() ?: return
 
-            val patterns = listOf(
-                Regex("""["']hlsUrl["']\s*:\s*["'](https?://[^"']+\.m3u8[^"']*)["']""", RegexOption.IGNORE_CASE),
-                Regex("""["']file["']\s*:\s*["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""", RegexOption.IGNORE_CASE),
-                Regex("""["']src["']\s*:\s*["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""", RegexOption.IGNORE_CASE),
-                Regex("""["']url["']\s*:\s*["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""", RegexOption.IGNORE_CASE),
-                Regex("""sources\s*:\s*\[\s*\{[^}]*["']file["']\s*:\s*["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""", RegexOption.IGNORE_CASE),
-                Regex("""https?://[^"'\s]+\.m3u8[^"'\s]*""", RegexOption.IGNORE_CASE),
-                Regex("""https?://[^"'\s]+\.mp4[^"'\s]*""", RegexOption.IGNORE_CASE),
-                Regex("""https?://[^"'\s]+\.txt[^"'\s]*""", RegexOption.IGNORE_CASE),
+        val subRegex = Regex("""\\"label\\":\\"([^\\"]*?)\\"[^}]*?\\"path\\":\\"([^\\"]*?)\\"""")
+
+        subRegex.findAll(scripts).forEach { match ->
+            val label = match.groupValues[1]
+            var vttUrl = match.groupValues[2]
+
+            if (!vttUrl.startsWith("http")) {
+                vttUrl = mainUrl.trimEnd('/') + vttUrl
+            }
+
+            subtitleCallback.invoke(
+                newSubtitleFile
+                    (label, vttUrl)
             )
-
-            val scriptUrl = patterns.firstNotNullOfOrNull { regex ->
-                regex.find(scriptData)?.groupValues?.getOrNull(1)?.trim()
-            } ?: ""
-
-            // Extract subtitles from packed script (same pattern as Jeniusplay)
-            doc?.select("script")?.forEach { script ->
-                if (script.data().contains("eval(function(p,a,c,k,e,d)")) {
-                    val unpacked = getAndUnpack(script.data())
-                    val subData = unpacked.substringAfter("\"tracks\":[", "").substringBefore("],", "")
-                    if (subData.isNotBlank()) {
-                        AppUtils.tryParseJson<List<Tracks>>("[$subData]")?.map { subtitle ->
-                            subtitleCallback.invoke(
-                                newSubtitleFile(
-                                    getLanguage(subtitle.label ?: ""),
-                                    subtitle.file
-                                )
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Extract subtitles from HTML track elements
-            doc?.select("track[kind=captions], track[kind=subtitles]")?.forEach { track ->
-                val subSrc = track.attr("abs:src").trim().takeIf { it.isNotBlank() } ?: return@forEach
-                val subLabel = track.attr("label").trim().takeIf { it.isNotBlank() } ?: track.attr("srclang").trim()
-                subtitleCallback.invoke(
-                    newSubtitleFile(
-                        getLanguage(subLabel),
-                        subSrc
-                    )
-                )
-            }
-
-            // Extract subtitles from script direct URLs (.vtt, .srt, .ass)
-            Regex("""https?://[^"'\s]+\.(?:vtt|srt|ass)(?:\?[^"'\s]*)?""", RegexOption.IGNORE_CASE)
-                .findAll(scriptData)
-                .map { it.value }
-                .distinct()
-                .forEach { subUrl ->
-                    subtitleCallback.invoke(
-                        newSubtitleFile(
-                            getLanguage(""),
-                            subUrl
-                        )
-                    )
-                }
-
-            listOf(src, videoSrc, scriptUrl).firstOrNull { it.startsWith("http", ignoreCase = true) }
-        } ?: return
-
-        if (resolvedUrl.contains(".m3u8", ignoreCase = true)) {
-            generateM3u8(name, resolvedUrl, referer ?: url).forEach(callback)
-            return
-        }
-
-        if (resolvedUrl.contains(".mp4", ignoreCase = true) || resolvedUrl.contains(".txt", ignoreCase = true)) {
-            callback.invoke(
-                newExtractorLink(name, name, resolvedUrl, INFER_TYPE) {
-                    this.referer = referer ?: url
-                }
-            )
-            return
-        }
-
-        callback.invoke(
-            newExtractorLink(name, name, resolvedUrl, INFER_TYPE) {
-                this.referer = referer ?: url
-            }
-        )
-    }
-
-    data class Tracks(
-        @JsonProperty("kind") val kind: String?,
-        @JsonProperty("file") val file: String,
-        @JsonProperty("label") val label: String?,
-    )
-
-    private fun getLanguage(str: String): String {
-        return when {
-            str.contains("indonesia", true) || str.contains("bahasa", true) || str.contains("indonesian", true) -> "Indonesian"
-            str.contains("english", true) -> "English"
-            else -> str.ifBlank { "Unknown" }
         }
     }
 }
-
