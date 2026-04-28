@@ -10,6 +10,7 @@ import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import org.json.JSONObject
 import java.net.URLEncoder
 
 class YflixProvider : MainAPI() {
@@ -133,6 +134,7 @@ class YflixProvider : MainAPI() {
 
         for (watchUrl in resolveWatchCandidates(info)) {
             val res = runCatching { app.get(watchUrl, referer = "$yflixApi/") }.getOrNull() ?: continue
+            if (resolveViaYflixAjax(watchUrl, res.text, info, subtitleCallback, ::emitLink)) return true
             val picked = extractPlayableUrl(res.text, res.document) ?: continue
             if (tryEmitPicked(picked, watchUrl, subtitleCallback, ::emitLink, emitted)) return true
         }
@@ -238,6 +240,113 @@ class YflixProvider : MainAPI() {
         ).map { it.trim() }
             .map { if (it.startsWith("//")) "https:$it" else it }
             .firstOrNull { it.startsWith("http", true) }
+    }
+
+    private suspend fun resolveViaYflixAjax(
+        watchUrl: String,
+        watchHtml: String,
+        info: LinkData,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val keyword = watchUrl.substringAfter("/watch/").substringBefore(".").substringBefore("?").trim()
+        if (keyword.isBlank()) return false
+        val dataId = Regex("""id=["']movie-rating["'][^>]*data-id=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+            .find(watchHtml)?.groupValues?.getOrNull(1)
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: return false
+
+        val listUrls = listOf(
+            "$yflixApi/ajax/episodes/list?keyword=$keyword&id=$dataId&_= $dataId".replace(" ", ""),
+            "$yflixApi/ajax/episodes/list?keyword=$keyword&id=$dataId",
+            "$yflixApi/ajax/episodes/list?keyword=$keyword&id=$dataId&_=${System.currentTimeMillis()}"
+        )
+
+        var episodesHtml: String? = null
+        for (u in listUrls) {
+            val text = runCatching { app.get(u, referer = watchUrl).text }.getOrNull() ?: continue
+            val result = runCatching { JSONObject(text).optString("result") }.getOrNull()
+            if (!result.isNullOrBlank()) {
+                episodesHtml = result
+                break
+            }
+        }
+        if (episodesHtml.isNullOrBlank()) return false
+
+        val epDoc = org.jsoup.Jsoup.parse(episodesHtml)
+        val candidateEpisode = selectEpisodeNode(epDoc, info) ?: return false
+        val eid = candidateEpisode.attr("eid").trim()
+        if (eid.isBlank()) return false
+
+        val linksListUrls = listOf(
+            "$yflixApi/ajax/links/list?eid=$eid&_=$eid",
+            "$yflixApi/ajax/links/list?eid=$eid",
+            "$yflixApi/ajax/links/list?eid=$eid&_=${System.currentTimeMillis()}"
+        )
+
+        var serversHtml: String? = null
+        for (u in linksListUrls) {
+            val text = runCatching { app.get(u, referer = watchUrl).text }.getOrNull() ?: continue
+            val result = runCatching { JSONObject(text).optString("result") }.getOrNull()
+            if (!result.isNullOrBlank()) {
+                serversHtml = result
+                break
+            }
+        }
+        if (serversHtml.isNullOrBlank()) return false
+
+        val serversDoc = org.jsoup.Jsoup.parse(serversHtml)
+        val servers = serversDoc.select("li.server[data-lid], div.server[data-lid]")
+        if (servers.isEmpty()) return false
+
+        var emitted = false
+        for (server in servers) {
+            val lid = server.attr("data-lid").trim()
+            if (lid.isBlank()) continue
+            val viewUrls = listOf(
+                "$yflixApi/ajax/links/view?id=$lid&_=$lid",
+                "$yflixApi/ajax/links/view?id=$lid",
+                "$yflixApi/ajax/links/view?id=$lid&_=${System.currentTimeMillis()}"
+            )
+
+            var resultPayload: String? = null
+            for (u in viewUrls) {
+                val text = runCatching { app.get(u, referer = watchUrl).text }.getOrNull() ?: continue
+                val result = runCatching { JSONObject(text).optString("result") }.getOrNull()
+                if (!result.isNullOrBlank()) {
+                    resultPayload = result
+                    break
+                }
+            }
+            if (resultPayload.isNullOrBlank()) continue
+
+            val resolvedUrl = extractUrlFromAnyPayload(resultPayload) ?: continue
+            runCatching { loadExtractor(resolvedUrl, watchUrl, subtitleCallback, callback) }
+            emitted = true
+        }
+        return emitted
+    }
+
+    private fun selectEpisodeNode(doc: org.jsoup.nodes.Document, info: LinkData): org.jsoup.nodes.Element? {
+        if (info.season == null || info.episode == null) {
+            return doc.selectFirst("ul.episodes a[eid]")
+        }
+        val exact = doc.select("ul.episodes[data-season=${info.season}] a[eid][num=${info.episode}]").firstOrNull()
+        if (exact != null) return exact
+        val bySeason = doc.select("ul.episodes[data-season=${info.season}] a[eid]").getOrNull((info.episode - 1).coerceAtLeast(0))
+        if (bySeason != null) return bySeason
+        return doc.selectFirst("a[eid]")
+    }
+
+    private fun extractUrlFromAnyPayload(payload: String): String? {
+        val trimmed = payload.trim()
+        runCatching {
+            val obj = JSONObject(trimmed)
+            obj.optString("url").takeIf { it.isNotBlank() }?.let { return it }
+        }
+        Regex("""https?://[^"'\\s]+""", RegexOption.IGNORE_CASE).find(trimmed)?.value?.let { return it }
+        return null
     }
 
     private suspend fun buildEpisodes(tmdbId: Int, imdbId: String?): List<Episode> {
