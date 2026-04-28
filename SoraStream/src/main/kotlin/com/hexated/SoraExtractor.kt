@@ -866,42 +866,70 @@ object SoraExtractor : SoraStream() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
     ) {
-        val url = if (season == null) {
-            "$autoEmbedAPI/movie/tmdb/$tmdbId"
-        } else {
-            "$autoEmbedAPI/tv/tmdb/$tmdbId-$season-$episode"
-        }
-
+        val id = tmdbId ?: return
         val referer = "$autoEmbedAPI/"
-        val document = app.get(url, referer = referer).document
-        val serverUrls = document.select(".servers [data-url]").mapNotNull { server ->
-            server.attr("data-url").takeIf { it.isNotBlank() }?.let { fixUrl(it, autoEmbedAPI) }
+        val isTv = season != null
+        val candidateUrls = if (!isTv) {
+            listOf(
+                "$autoEmbedAPI/movie/$id/watch",
+                "$autoEmbedAPI/movie/$id",
+                "$autoEmbedAPI/movie/tmdb/$id",
+            )
+        } else {
+            val ep = episode ?: return
+            buildList {
+                add("$autoEmbedAPI/tv/$id/watch?season=$season&episode=$ep")
+                add("$autoEmbedAPI/tv/$id/watch?s=$season&e=$ep")
+                add("$autoEmbedAPI/tv/$id/$season/$ep/watch")
+                add("$autoEmbedAPI/tv/$id/$season/$ep")
+                add("$autoEmbedAPI/tv/$id/watch")
+                add("$autoEmbedAPI/tv/tmdb/$id-$season-$ep")
+            }
         }.distinct()
 
         var emitted = false
-        serverUrls.forEach { serverUrl ->
-            when {
-                loadVidsrcXpass(serverUrl, season != null, referer, callback) -> {
-                    emitted = true
-                }
-                else -> {
-                    loadExtractor(serverUrl, referer, subtitleCallback) { link ->
+        candidateUrls.forEach route@{ url ->
+            val response = runCatching { app.get(url, referer = referer) }.getOrNull() ?: return@route
+            val html = response.text
+            val serverUrls = (
+                response.document.select(".servers [data-url], button.server-btn[data-url], [data-url]")
+                    .mapNotNull { it.attr("data-url").takeIf { value -> value.isNotBlank() } } +
+                Regex("""data-url=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+                    .findAll(html)
+                    .map { it.groupValues[1] }
+                    .toList()
+            ).map { fixUrl(it, autoEmbedAPI) }.distinct()
+
+            serverUrls.forEach { serverUrl ->
+                when {
+                    loadVidsrcXpass(serverUrl, isTv, referer, callback) -> {
                         emitted = true
-                        callback.invoke(link)
+                    }
+                    else -> {
+                        loadExtractor(serverUrl, referer, subtitleCallback) { link ->
+                            emitted = true
+                            callback.invoke(link)
+                        }
                     }
                 }
             }
+
+            if (emitted) return@route
+
+            if (invokeWebviewEmbedSource(
+                    "AutoEmbed",
+                    url,
+                    referer,
+                    autoEmbedAPI,
+                    callback,
+                    useOkhttp = false
+                )
+            ) {
+                emitted = true
+            }
         }
 
-        if (!emitted) {
-            invokeWebviewEmbedSource(
-                "AutoEmbed",
-                url,
-                referer,
-                autoEmbedAPI,
-                callback
-            )
-        }
+        if (emitted) return
     }
 
     suspend fun invoke2Embed(

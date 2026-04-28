@@ -32,6 +32,7 @@ class AutoEmbedProvider : MainAPI() {
     private val vidSrcApi = "https://vidsrc.net"
     private val vixsrcApi = "https://vixsrc.to"
     private val vixsrcProxy = "https://proxy.heistotron.uk"
+    private val autoEmbedApi = "https://watch-v2.autoembed.app"
 
     override val mainPage = mainPageOf(
         "$tmdbApi/trending/movie/day?api_key=$tmdbApiKey" to "Trending Movies",
@@ -618,6 +619,9 @@ class AutoEmbedProvider : MainAPI() {
 
         return if (season == null || episode == null) {
             buildList {
+                add(WebsiteServer("AutoEmbed", "$autoEmbedApi/movie/$tmdbId/watch", "$autoEmbedApi/"))
+                add(WebsiteServer("AutoEmbed", "$autoEmbedApi/movie/$tmdbId", "$autoEmbedApi/"))
+                add(WebsiteServer("AutoEmbed", "$autoEmbedApi/movie/tmdb/$tmdbId", "$autoEmbedApi/"))
                 add(WebsiteServer("4K", "https://player.videasy.net/movie/$tmdbId"))
                 add(WebsiteServer("Max", "https://ythd.org/embed/$tmdbId"))
                 add(WebsiteServer("Atlas", "https://vidsrc.cc/v2/embed/movie/$tmdbId"))
@@ -643,6 +647,12 @@ class AutoEmbedProvider : MainAPI() {
             }
         } else {
             buildList {
+                add(WebsiteServer("AutoEmbed", "$autoEmbedApi/tv/$tmdbId/watch?season=$season&episode=$episode", "$autoEmbedApi/"))
+                add(WebsiteServer("AutoEmbed", "$autoEmbedApi/tv/$tmdbId/watch?s=$season&e=$episode", "$autoEmbedApi/"))
+                add(WebsiteServer("AutoEmbed", "$autoEmbedApi/tv/$tmdbId/$season/$episode/watch", "$autoEmbedApi/"))
+                add(WebsiteServer("AutoEmbed", "$autoEmbedApi/tv/$tmdbId/$season/$episode", "$autoEmbedApi/"))
+                add(WebsiteServer("AutoEmbed", "$autoEmbedApi/tv/$tmdbId/watch", "$autoEmbedApi/"))
+                add(WebsiteServer("AutoEmbed", "$autoEmbedApi/tv/tmdb/$tmdbId-$season-$episode", "$autoEmbedApi/"))
                 add(WebsiteServer("4K", "https://player.videasy.net/tv/$tmdbId/$season/$episode"))
                 add(WebsiteServer("Max", "https://ythd.org/embed/$tmdbId/$season-$episode"))
                 add(WebsiteServer("Atlas", "https://vidsrc.cc/v2/embed/tv/$tmdbId/$season/$episode"))
