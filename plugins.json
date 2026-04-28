@@ -129,24 +129,23 @@
         "name": "Azmovies"
     },
     {
-        "iconUrl": "https://t0.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://cinemacity.cc&size=64",
-        "fileHash": "sha256-33321fdf67586d5098b91f319eb1be181e1964ffeea63ccc252d0f6815cdb356",
+        "iconUrl": "https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/Icons/Cinemacity.png",
+        "fileHash": "sha256-073f46fdd2867e1b2da2deb6e16ff8eb4d1fd2be80255453178d56d7e0bbeadb",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 33879,
+        "fileSize": 39718,
         "status": 1,
-        "language": "id",
+        "language": "en",
         "authors": [
-            "Codex"
+            "Phisher98"
         ],
         "tvTypes": [
             "Movie",
-            "TvSeries",
-            "Anime",
-            "AsianDrama"
+            "TvSeries"
         ],
-        "version": 1,
+        "version": 6,
         "internalName": "CinemacityProvider",
+        "description": "Watch Movies & TvSeries (Multi-Lang/Audio)",
         "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/CinemacityProvider.cs3",
         "name": "CinemacityProvider"
     },
