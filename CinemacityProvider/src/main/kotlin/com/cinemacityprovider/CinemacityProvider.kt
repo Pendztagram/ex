@@ -33,7 +33,7 @@ class CinemacityProvider : MainAPI() {
     override var name = "Cinemacity"
     override val hasMainPage = true
     override var lang = "id"
-    override val hasDownloadSupport = false
+    override val hasDownloadSupport = true
     override val supportedTypes = setOf(
         TvType.Movie,
         TvType.TvSeries,
@@ -44,15 +44,29 @@ class CinemacityProvider : MainAPI() {
     override val mainPage = mainPageOf(
         "$mainUrl/movies/page/%d/" to "Movie",
         "$mainUrl/tv-series/page/%d/" to "TV Series",
-        "$mainUrl/xfsearch/genre/anime/page/%d/" to "Anime",
-        "$mainUrl/xfsearch/genre/asian/page/%d/" to "Asian",
+        "filter://anime/%d" to "Anime",
+        "filter://asian/%d" to "Asian",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = if (request.data.contains("%d")) request.data.format(page) else request.data
-        val document = app.get(url).document
-        val home = document.select("div.dar-short_item").mapNotNull { it.toSearchResult() }
+        val data = request.data
+        val home = when {
+            data.startsWith("filter://anime/") -> getFilteredByGenre(page, "anime")
+            data.startsWith("filter://asian/") -> getFilteredByGenre(page, "asian")
+            else -> {
+                val url = if (data.contains("%d")) data.format(page) else data
+                val document = app.get(url).document
+                document.select("div.dar-short_item").mapNotNull { it.toSearchResult() }
+            }
+        }
         return newHomePageResponse(request.name, home)
+    }
+
+    private suspend fun getFilteredByGenre(page: Int, genre: String): List<SearchResponse> {
+        val movieDoc = app.get("$mainUrl/movies/page/$page/").document
+        val seriesDoc = app.get("$mainUrl/tv-series/page/$page/").document
+        val cards = movieDoc.select("div.dar-short_item") + seriesDoc.select("div.dar-short_item")
+        return cards.mapNotNull { it.toSearchResultByGenre(genre) }
     }
 
     override suspend fun quickSearch(query: String): List<SearchResponse>? = search(query, 1)?.items
@@ -89,6 +103,12 @@ class CinemacityProvider : MainAPI() {
                 this.year = year
             }
         }
+    }
+
+    private fun Element.toSearchResultByGenre(genre: String): SearchResponse? {
+        val genresText = selectFirst("div.dar-short_meta")?.text()?.lowercase().orEmpty()
+        if (!genresText.contains(genre.lowercase())) return null
+        return toSearchResult()
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -128,27 +148,50 @@ class CinemacityProvider : MainAPI() {
     }
 
     private fun extractEpisodes(document: org.jsoup.nodes.Document, url: String): List<Episode> {
-        val episodes = mutableListOf<Episode>()
-        val seen = hashSetOf<String>()
-        val regex = Regex("S(\\d+)E(\\d+)", RegexOption.IGNORE_CASE)
+        val out = linkedMapOf<String, Episode>()
 
-        document.select("div#download div.dar-tr_title > div").forEach { row ->
-            val text = row.text().trim()
-            val match = regex.find(text) ?: return@forEach
-            val season = match.groupValues[1].toIntOrNull()
-            val episode = match.groupValues[2].toIntOrNull()
-            val key = "${season}_${episode}"
-            if (!seen.add(key)) return@forEach
-
-            episodes.add(
-                newEpisode(LinkData(url).toJson()) {
-                    this.name = "Episode $episode"
-                    this.season = season
-                    this.episode = episode
-                }
-            )
+        fun addEpisode(season: Int?, episode: Int?, name: String? = null) {
+            if (episode == null) return
+            val key = "${season ?: 1}_$episode"
+            if (out.containsKey(key)) return
+            out[key] = newEpisode(LinkData(url).toJson()) {
+                this.name = name ?: "Episode $episode"
+                this.season = season ?: 1
+                this.episode = episode
+            }
         }
 
+        // 1) Direct selectors in section download (closest to site structure)
+        val seasons = document.select("select[name=dar-dl_season] option")
+            .mapNotNull { Regex("(\\d+)").find(it.text())?.groupValues?.getOrNull(1)?.toIntOrNull() }
+            .distinct()
+        val eps = document.select("select[name=dar-dl_episode] option")
+            .mapNotNull { Regex("(\\d+)").find(it.text())?.groupValues?.getOrNull(1)?.toIntOrNull() }
+            .distinct()
+        if (seasons.isNotEmpty() && eps.isNotEmpty()) {
+            seasons.forEach { s -> eps.forEach { e -> addEpisode(s, e) } }
+        }
+
+        // 2) Parse download filenames: FROM.S1E1.1080p...
+        val fileRegex = Regex("S(\\d+)E(\\d+)", RegexOption.IGNORE_CASE)
+        document.select("div#download div.dar-tr_title > div").forEach { row ->
+            val text = row.text().trim()
+            val match = fileRegex.find(text) ?: return@forEach
+            val season = match.groupValues.getOrNull(1)?.toIntOrNull()
+            val episode = match.groupValues.getOrNull(2)?.toIntOrNull()
+            addEpisode(season, episode, "Episode ${episode ?: "?"}")
+        }
+
+        // 3) Parse schedule block: "Episode 3 - May 3, 2026"
+        val schedRegex = Regex("Episode\\s*(\\d+)", RegexOption.IGNORE_CASE)
+        document.select("div.ta-full_text1").forEach { block ->
+            block.text().lineSequence().forEach { line ->
+                val ep = schedRegex.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: return@forEach
+                addEpisode(1, ep)
+            }
+        }
+
+        val episodes = out.values.sortedWith(compareBy({ it.season ?: 1 }, { it.episode ?: 0 })).toMutableList()
         if (episodes.isEmpty()) {
             episodes.add(
                 newEpisode(LinkData(url).toJson()) {
