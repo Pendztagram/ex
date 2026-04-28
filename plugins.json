@@ -109,27 +109,6 @@
         "name": "AuraTail"
     },
     {
-        "iconUrl": "https://www.themoviedb.org/favicon.ico",
-        "fileHash": "sha256-dfd33f40bcb833490bf04551ca78be0c820028873ba0c89d7893eff9e24710a2",
-        "apiVersion": 1,
-        "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 62607,
-        "status": 1,
-        "language": "en",
-        "authors": [
-            "Duro92"
-        ],
-        "tvTypes": [
-            "Movie",
-            "TvSeries"
-        ],
-        "version": 1,
-        "internalName": "AutoEmbedProvider",
-        "description": "AutoEmbed TMDB-backed movie and TV catalog provider",
-        "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/AutoEmbedProvider.cs3",
-        "name": "AutoEmbedProvider"
-    },
-    {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://azmovies.to&size=%size%",
         "fileHash": "sha256-9467e21864b03ea06e81a03b7ea45a2d28079118466280bd5ec545635f152033",
         "apiVersion": 1,
@@ -148,26 +127,6 @@
         "description": "Azmovies",
         "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/Azmovies.cs3",
         "name": "Azmovies"
-    },
-    {
-        "fileHash": "sha256-15a5796d1928b15e813104d5c64cd5168c316a44befb671849d072e4b11d8b42",
-        "apiVersion": 1,
-        "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 57046,
-        "status": 1,
-        "language": "id",
-        "authors": [
-            "OpenAI"
-        ],
-        "tvTypes": [
-            "Anime",
-            "AnimeMovie"
-        ],
-        "version": 1,
-        "internalName": "BstationProvider",
-        "description": "Provider anime Bstation region Indonesia",
-        "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/BstationProvider.cs3",
-        "name": "BstationProvider"
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://donghub.vip&size=%size%",
@@ -191,49 +150,6 @@
         "description": "Anime and Movies",
         "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/Donghub.cs3",
         "name": "Donghub"
-    },
-    {
-        "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://drakorid.co&size=%size%",
-        "fileHash": "sha256-f6b53b552967e6a38d9734c74ddf826283d9cceb749f5466e3fdeb558b414060",
-        "apiVersion": 1,
-        "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 22682,
-        "status": 1,
-        "language": "id",
-        "authors": [
-            "Codex"
-        ],
-        "tvTypes": [
-            "AsianDrama",
-            "TvSeries",
-            "Movie"
-        ],
-        "version": 1,
-        "internalName": "DrakoridProvider",
-        "description": "Drakor.id",
-        "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/DrakoridProvider.cs3",
-        "name": "DrakoridProvider"
-    },
-    {
-        "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://db.hafizhibnusyam.my.id&size=%size%",
-        "fileHash": "sha256-e584d3fcee1836355041685f8bfea48af28df105a8c0ffc20ba15d41de968b13",
-        "apiVersion": 1,
-        "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 29727,
-        "status": 1,
-        "language": "id",
-        "authors": [
-            "Duro92"
-        ],
-        "tvTypes": [
-            "TvSeries",
-            "AsianDrama"
-        ],
-        "version": 1,
-        "internalName": "Dramabox",
-        "description": "DramaBox API",
-        "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/Dramabox.cs3",
-        "name": "Dramabox"
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://justilien.com&size=%size%",
@@ -607,27 +523,6 @@
         "name": "LayarKacaProvider"
     },
     {
-        "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://melolo.com&size=%size%",
-        "fileHash": "sha256-75a32f4cbabc88613e0546c00b860878052499f08043c86ac59b020fcaae669f",
-        "apiVersion": 1,
-        "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 30776,
-        "status": 1,
-        "language": "id",
-        "authors": [
-            "duro92"
-        ],
-        "tvTypes": [
-            "TvSeries",
-            "AsianDrama"
-        ],
-        "version": 3,
-        "internalName": "Melolo",
-        "description": "Melolo short drama provider",
-        "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/Melolo.cs3",
-        "name": "Melolo"
-    },
-    {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://tv11.melongmovies.com&size=%size%",
         "fileHash": "sha256-2318ae60878e6577f416895f68a967e0e8299c948e697881da229c104ab66c82",
         "apiVersion": 1,
@@ -954,6 +849,27 @@
         "description": "Winbu",
         "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/Winbu.cs3",
         "name": "Winbu"
+    },
+    {
+        "iconUrl": "https://yflix.to/favicon.ico",
+        "fileHash": "sha256-73a1aea00274b35d47dc8d5692710173497f93c5750d11044cfe33bd61471e40",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/Pendztagram/ex",
+        "fileSize": 31858,
+        "status": 1,
+        "language": "en",
+        "authors": [
+            "Duro92"
+        ],
+        "tvTypes": [
+            "Movie",
+            "TvSeries"
+        ],
+        "version": 1,
+        "internalName": "YflixProvider",
+        "description": "Yflix TMDB-backed movie and TV catalog provider",
+        "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/YflixProvider.cs3",
+        "name": "YflixProvider"
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://zoronime.online&size=%size%",
