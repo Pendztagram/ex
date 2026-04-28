@@ -1,14 +1,14 @@
-version = 1
+version = 6
 
 cloudstream {
-    language = "id"
-    authors = listOf("Codex")
+    description = "Watch Movies & TvSeries (Multi-Lang/Audio)"
+    authors = listOf("Phisher98")
     status = 1
     tvTypes = listOf(
         "Movie",
         "TvSeries",
-        "Anime",
-        "AsianDrama",
     )
-    iconUrl = "https://t0.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://cinemacity.cc&size=64"
+    language = "en"
+    iconUrl = "https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/Icons/Cinemacity.png"
+    isCrossPlatform = false
 }

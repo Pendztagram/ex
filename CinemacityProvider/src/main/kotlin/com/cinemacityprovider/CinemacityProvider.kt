@@ -1,244 +1,337 @@
 package com.cinemacityprovider
 
+import android.util.Log
+import com.google.gson.Gson
+import com.lagradost.cloudstream3.Actor
+import com.lagradost.cloudstream3.ActorData
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.LoadResponse
+import com.lagradost.cloudstream3.LoadResponse.Companion.addImdbId
+import com.lagradost.cloudstream3.LoadResponse.Companion.addTMDbId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.MainPageRequest
+import com.lagradost.cloudstream3.Score
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.SearchResponseList
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.addDate
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.base64Decode
 import com.lagradost.cloudstream3.fixUrl
 import com.lagradost.cloudstream3.fixUrlNull
+import com.lagradost.cloudstream3.getQualityFromString
 import com.lagradost.cloudstream3.mainPageOf
 import com.lagradost.cloudstream3.newEpisode
 import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.newMovieLoadResponse
 import com.lagradost.cloudstream3.newMovieSearchResponse
+import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.newTvSeriesLoadResponse
-import com.lagradost.cloudstream3.newTvSeriesSearchResponse
 import com.lagradost.cloudstream3.toNewSearchResponseList
-import com.lagradost.cloudstream3.utils.AppUtils
-import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.M3u8Helper.Companion.generateM3u8
-import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.INFER_TYPE
+import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.newExtractorLink
+import org.json.JSONArray
+import org.json.JSONObject
 import org.jsoup.nodes.Element
-import java.util.Locale
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 
 class CinemacityProvider : MainAPI() {
     override var mainUrl = "https://cinemacity.cc"
-    override var name = "Cinemacity"
+    override var name = "CinemaCity"
+    override var lang = "en"
     override val hasMainPage = true
-    override var lang = "id"
-    override val hasDownloadSupport = true
-    override val supportedTypes = setOf(
-        TvType.Movie,
-        TvType.TvSeries,
-        TvType.Anime,
-        TvType.AsianDrama,
-    )
+    override val hasDownloadSupport = false
+    override val hasChromecastSupport = true
+    override val hasQuickSearch = false
+    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
+
+    companion object {
+        val headers = mapOf(
+            "Cookie" to base64Decode("ZGxlX3VzZXJfaWQ9MzI3Mjk7IGRsZV9wYXNzd29yZD04OTQxNzFjNmE4ZGFiMThlZTU5NGQ1YzY1MjAwOWEzNTs=")
+        )
+        private const val TMDBIMAGEBASEURL = "https://image.tmdb.org/t/p/original"
+        private const val cinemetaUrl = "https://v3-cinemeta.strem.io/meta"
+    }
 
     override val mainPage = mainPageOf(
-        "$mainUrl/movies/page/%d/" to "Movie",
-        "$mainUrl/tv-series/page/%d/" to "TV Series",
-        "filter://anime/%d" to "Anime",
-        "filter://asian/%d" to "Asian",
+        "movies" to "Movies",
+        "tv-series" to "TV Series",
+        "xfsearch/genre/anime" to "Anime",
+        "xfsearch/genre/asian" to "Asian",
+        "xfsearch/genre/animation" to "Animation",
+        "xfsearch/genre/documentary" to "Documentary",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val data = request.data
-        val home = when {
-            data.startsWith("filter://anime/") -> getFilteredByGenre(page, "anime")
-            data.startsWith("filter://asian/") -> getFilteredByGenre(page, "asian")
-            else -> {
-                val url = if (data.contains("%d")) data.format(page) else data
-                val document = app.get(url).document
-                document.select("div.dar-short_item").mapNotNull { it.toSearchResult() }
+        val doc = if (page == 1) app.get("$mainUrl/${request.data}", headers = headers).document
+        else app.get("$mainUrl/${request.data}/page/$page", headers = headers).document
+
+        val home = doc.select("div.dar-short_item").mapNotNull { it.toSearchResult() }
+        return newHomePageResponse(request.name, home, true)
+    }
+
+    private fun Element.toSearchResult(): SearchResponse {
+        val title = this.children().firstOrNull { it.tagName() == "a" }?.ownText()?.substringBefore("(")?.trim().orEmpty()
+        val href = fixUrl(this.children().firstOrNull { it.tagName() == "a" }?.attr("href") ?: "")
+        val posterUrl = fixUrlNull(this.select("div.dar-short_bg a ").attr("href"))
+        val score = this.selectFirst("span.rating-color")?.ownText()
+        val quality = this
+            .selectFirst("div.dar-short_bg.e-cover > div span:nth-child(2) > a")
+            ?.text()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { if (it.contains("TS", true)) "TS" else "HD" }
+            ?: run {
+                if (this.selectFirst("div.dar-short_bg.e-cover > div > span")?.text()?.contains("TS", true) == true) "TS" else "HD"
             }
+
+        val type = if (href.contains("/tv-series/", true)) TvType.TvSeries else TvType.Movie
+        return newMovieSearchResponse(title, href, type) {
+            this.posterUrl = posterUrl
+            this.score = Score.from10(score)
+            this.quality = getQualityFromString(quality)
         }
-        return newHomePageResponse(request.name, home)
     }
 
-    private suspend fun getFilteredByGenre(page: Int, genre: String): List<SearchResponse> {
-        val movieDoc = app.get("$mainUrl/movies/page/$page/").document
-        val seriesDoc = app.get("$mainUrl/tv-series/page/$page/").document
-        val cards = movieDoc.select("div.dar-short_item") + seriesDoc.select("div.dar-short_item")
-        return cards.mapNotNull { it.toSearchResultByGenre(genre) }
-    }
-
-    override suspend fun quickSearch(query: String): List<SearchResponse>? = search(query, 1)?.items
-
-    override suspend fun search(query: String, page: Int): SearchResponseList? {
-        val document = app.post(
-            "$mainUrl/index.php",
-            data = mapOf(
-                "do" to "search",
-                "subaction" to "search",
-                "story" to query,
-            ),
+    override suspend fun search(query: String, page: Int): SearchResponseList {
+        val encodedQuery = URLEncoder.encode(query, StandardCharsets.UTF_8.toString())
+        val doc = app.get(
+            "$mainUrl/?do=search&subaction=search&search_start=0&full_search=0&story=$encodedQuery",
+            headers = headers
         ).document
-
-        val results = document.select("div.dar-short_item").mapNotNull { it.toSearchResult() }
-        return results.toNewSearchResponseList()
-    }
-
-    private fun Element.toSearchResult(): SearchResponse? {
-        val href = selectFirst("a[href*=\"/movies/\"], a[href*=\"/tv-series/\"]")?.attr("href") ?: return null
-        val title = selectFirst("a.e-nowrap")?.text()?.trim().orEmpty()
-        if (title.isBlank()) return null
-        val poster = fixUrlNull(selectFirst("img.poster")?.attr("src"))
-        val year = Regex("\\((\\d{4})").find(title)?.groupValues?.getOrNull(1)?.toIntOrNull()
-
-        return if (href.contains("/tv-series/")) {
-            newTvSeriesSearchResponse(title, fixUrl(href), TvType.TvSeries) {
-                this.posterUrl = poster
-                this.year = year
-            }
-        } else {
-            newMovieSearchResponse(title, fixUrl(href), TvType.Movie) {
-                this.posterUrl = poster
-                this.year = year
-            }
-        }
-    }
-
-    private fun Element.toSearchResultByGenre(genre: String): SearchResponse? {
-        val genresText = selectFirst("div.dar-short_meta")?.text()?.lowercase().orEmpty()
-        if (!genresText.contains(genre.lowercase())) return null
-        return toSearchResult()
+        val res = doc.select("div.dar-short_item").mapNotNull { it.toSearchResult() }
+        return res.toNewSearchResponseList()
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url).document
-        val title = document.selectFirst("h1")?.text()?.trim().orEmpty()
-        val poster = fixUrlNull(document.selectFirst("div.dar-full_poster img")?.attr("src"))
-        val background = fixUrlNull(document.selectFirst("div.dar-full_bg img")?.attr("src"))
-        val plot = document.selectFirst("div.ta-full_text1")?.text()?.trim()
-        val tags = document.select("div.ta-full_meta a[href*=\"/xfsearch/genre/\"]").map { it.text().trim() }.distinct()
-        val year = Regex("\\((\\d{4})").find(title)?.groupValues?.getOrNull(1)?.toIntOrNull()
-        val trailer = document.selectFirst("a[href*=\"youtube.com/watch\"]")?.attr("href")
-        val recs = document.select("div.ta-rel_item").mapNotNull { it.toRecommendation() }
+        val page = app.get(url, headers)
+        val doc = page.document
 
-        val isSeries = url.contains("/tv-series/")
-        return if (isSeries) {
-            val episodes = extractEpisodes(document, url)
-            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-                this.posterUrl = poster
-                this.backgroundPosterUrl = background
-                this.plot = plot
-                this.tags = tags
-                this.year = year
-                addTrailer(trailer)
-                this.recommendations = recs
-            }
-        } else {
-            newMovieLoadResponse(title, url, TvType.Movie, LinkData(url).toJson()) {
-                this.posterUrl = poster
-                this.backgroundPosterUrl = background
-                this.plot = plot
-                this.tags = tags
-                this.year = year
-                addTrailer(trailer)
-                this.recommendations = recs
+        val ogTitle = doc.selectFirst("meta[property=og:title]")?.attr("content").orEmpty()
+        val title = ogTitle.substringBefore("(").trim()
+        val poster = doc.selectFirst("meta[property=og:image]")?.attr("content").orEmpty()
+        val bgposter = doc.selectFirst("div.dar-full_bg a")?.attr("href")
+        val trailer = doc.select("div.dar-full_bg.e-cover > div").attr("data-vbg")
+
+        val audioLanguages = doc
+            .select("li")
+            .firstOrNull { it.selectFirst("span")?.text()?.equals("Audio language", ignoreCase = true) == true }
+            ?.select("span:eq(1) a")
+            ?.map { it.text().trim() }
+            ?.filter { it.isNotEmpty() }
+            ?.joinToString(", ")
+
+        val descriptions = doc.selectFirst("#about div.ta-full_text1")?.text()
+
+        val recommendation = doc.select("div.ta-rel > div.ta-rel_item").map {
+            val recTitle = it.select("a").text().substringBefore("(").trim()
+            val href = fixUrl(it.selectFirst("> div > a")?.attr("href") ?: "")
+            val score = it.select("span.rating-color1").text()
+            val posterUrl = it.selectFirst("div > a")?.attr("href")
+
+            newMovieSearchResponse(recTitle, href, TvType.Movie) {
+                this.posterUrl = posterUrl
+                this.score = Score.from10(score)
             }
         }
-    }
 
-    private fun extractEpisodes(document: org.jsoup.nodes.Document, url: String): List<Episode> {
-        val playlist = extractPlaylist(document)
-        if (playlist.isNotEmpty() && playlist.any { !it.folder.isNullOrEmpty() }) {
-            val episodes = mutableListOf<Episode>()
-            playlist.forEachIndexed { sIdx, season ->
-                season.folder.orEmpty().forEachIndexed { eIdx, ep ->
-                    episodes.add(
-                        newEpisode(
-                            LinkData(
-                                url = url,
-                                seasonIndex = sIdx,
-                                episodeIndex = eIdx,
-                                qualityIndex = null,
-                            ).toJson()
-                        ) {
-                            this.name = ep.title?.ifBlank { null } ?: "Episode ${eIdx + 1}"
-                            this.season = sIdx + 1
-                            this.episode = eIdx + 1
+        val year = ogTitle.substringAfter("(", "").substringBefore(")").toIntOrNull()
+        val tvtype = if (url.contains("/movies/", true)) TvType.Movie else TvType.TvSeries
+        val tmdbMetaType = if (tvtype == TvType.TvSeries) "tv" else "movie"
+
+        var genre: List<String>? = null
+        var background: String? = null
+        var description: String? = null
+
+        val imdbId = doc
+            .select("div.ta-full_rating1 > div")
+            .mapNotNull { it.attr("onclick") }
+            .firstNotNullOfOrNull { Regex("tt\\d+").find(it)?.value }
+
+        val tmdbId = imdbId?.let { id ->
+            runCatching {
+                val obj = JSONObject(
+                    app.get(
+                        "https://api.themoviedb.org/3/find/$id" +
+                            "?api_key=1865f43a0549ca50d341dd9ab8b29f49" +
+                            "&external_source=imdb_id"
+                    ).text
+                )
+                obj.optJSONArray("movie_results")?.optJSONObject(0)?.optInt("id")?.takeIf { it != 0 }
+                    ?: obj.optJSONArray("tv_results")?.optJSONObject(0)?.optInt("id")?.takeIf { it != 0 }
+            }.getOrNull()?.toString()
+        }
+
+        val logoPath = imdbId?.let { "https://live.metahub.space/logo/medium/$it/img" }
+
+        val creditsJson = tmdbId?.let {
+            runCatching {
+                app.get(
+                    "https://api.themoviedb.org/3/$tmdbMetaType/$it/credits" +
+                        "?api_key=1865f43a0549ca50d341dd9ab8b29f49&language=en-US"
+                ).text
+            }.getOrNull()
+        }
+        val castList = parseCredits(creditsJson)
+
+        val typeSet = if (tvtype == TvType.TvSeries) "series" else "movie"
+        val responseData = imdbId?.takeIf { it.isNotBlank() }?.let {
+            val text = app.get("$cinemetaUrl/$typeSet/$it.json").text
+            if (text.startsWith("{")) Gson().fromJson(text, ResponseData::class.java) else null
+        }
+
+        responseData?.meta?.let {
+            description = it.description ?: descriptions
+            background = it.background ?: poster
+            genre = it.genres
+        }
+
+        val epMetaMap: Map<String, ResponseData.Meta.EpisodeDetails> =
+            responseData?.meta?.videos
+                ?.filter { it.season != null && it.episode != null }
+                ?.associateBy { "${it.season}:${it.episode}" }
+                ?: emptyMap()
+
+        val playerScript = doc.select("script:containsData(atob)").getOrNull(1)?.data()
+            ?: error("PlayerJS not found; only torrent links available")
+
+        val decodedPlayer = base64Decode(
+            playerScript.substringAfter("atob(\"").substringBefore("\")")
+        )
+
+        val playerJson = JSONObject(
+            decodedPlayer.substringAfter("new Playerjs(").substringBeforeLast(");")
+        )
+
+        val rawFile = playerJson.opt("file") ?: error("PlayerJS: missing file field")
+        val fileArray: JSONArray = when (rawFile) {
+            is JSONArray -> rawFile
+            is String -> {
+                val value = rawFile.trim()
+                when {
+                    value.startsWith("[") && value.endsWith("]") -> JSONArray(value)
+                    value.startsWith("{") && value.endsWith("}") -> JSONArray().apply { put(JSONObject(value)) }
+                    value.isNotBlank() -> JSONArray().apply {
+                        put(JSONObject().apply { put("file", value) })
+                    }
+                    else -> error("PlayerJS: empty file string")
+                }
+            }
+            else -> error("PlayerJS: unsupported file type")
+        }
+
+        val seasonRegex = Regex("Season\\s*(\\d+)", RegexOption.IGNORE_CASE)
+        val episodeRegex = Regex("Episode\\s*(\\d+)", RegexOption.IGNORE_CASE)
+
+        val episodeList = mutableListOf<Episode>()
+
+        val movieHrefs: String? = fileArray.optJSONObject(0)
+            ?.takeIf { !it.has("folder") }
+            ?.optString("file")
+            ?.takeIf { it.isNotBlank() }
+
+        val movieSubtitleTracks = parseSubtitles(
+            when {
+                playerJson.opt("subtitle") is String -> playerJson.optString("subtitle")
+                fileArray.optJSONObject(0)?.opt("subtitle") is String -> fileArray.optJSONObject(0)?.optString("subtitle")
+                else -> null
+            }
+        )
+
+        val movieJson = movieHrefs?.let {
+            JSONObject().apply {
+                put("streamUrl", it)
+                put("subtitleTracks", movieSubtitleTracks)
+            }.toString()
+        }
+
+        if (tvtype == TvType.TvSeries) {
+            for (i in 0 until fileArray.length()) {
+                val seasonJson = fileArray.getJSONObject(i)
+                val seasonNumber = seasonRegex.find(seasonJson.optString("title"))?.groupValues?.get(1)?.toIntOrNull() ?: continue
+                val episodes = seasonJson.optJSONArray("folder") ?: continue
+                for (j in 0 until episodes.length()) {
+                    val epJson = episodes.getJSONObject(j)
+                    val episodeNumber = episodeRegex.find(epJson.optString("title"))?.groupValues?.get(1)?.toIntOrNull() ?: continue
+
+                    val streamUrls = mutableListOf<String>()
+                    epJson.optString("file").takeIf { it.isNotBlank() }?.let { streamUrls += it }
+                    epJson.optJSONArray("folder")?.let { sources ->
+                        for (k in 0 until sources.length()) {
+                            sources.optJSONObject(k)?.optString("file")?.takeIf { it.isNotBlank() }?.let { streamUrls += it }
                         }
-                    )
+                    }
+                    if (streamUrls.isEmpty()) continue
+
+                    val epMeta = epMetaMap["$seasonNumber:$episodeNumber"]
+                    val epSubtitleTracks = parseSubtitles(epJson.optString("subtitle"))
+
+                    val epData = JSONObject().apply {
+                        put("streams", JSONArray(streamUrls))
+                        put("subtitleTracks", epSubtitleTracks)
+                    }.toString()
+
+                    episodeList += newEpisode(epData) {
+                        this.season = seasonNumber
+                        this.episode = episodeNumber
+                        this.name = epMeta?.name ?: "S${seasonNumber}E${episodeNumber}"
+                        this.description = epMeta?.overview
+                        this.posterUrl = epMeta?.thumbnail
+                        addDate(epMeta?.released)
+                    }
                 }
             }
-            if (episodes.isNotEmpty()) return episodes
-        }
 
-        val out = linkedMapOf<String, Episode>()
-
-        fun addEpisode(season: Int?, episode: Int?, name: String? = null) {
-            if (episode == null) return
-            val key = "${season ?: 1}_$episode"
-            if (out.containsKey(key)) return
-            out[key] = newEpisode(LinkData(url).toJson()) {
-                this.name = name ?: "Episode $episode"
-                this.season = season ?: 1
-                this.episode = episode
-            }
-        }
-
-        // 1) Direct selectors in section download (closest to site structure)
-        val seasons = document.select("select[name=dar-dl_season] option")
-            .mapNotNull { Regex("(\\d+)").find(it.text())?.groupValues?.getOrNull(1)?.toIntOrNull() }
-            .distinct()
-        val eps = document.select("select[name=dar-dl_episode] option")
-            .mapNotNull { Regex("(\\d+)").find(it.text())?.groupValues?.getOrNull(1)?.toIntOrNull() }
-            .distinct()
-        if (seasons.isNotEmpty() && eps.isNotEmpty()) {
-            seasons.forEach { s -> eps.forEach { e -> addEpisode(s, e) } }
-        }
-
-        // 2) Parse download filenames: FROM.S1E1.1080p...
-        val fileRegex = Regex("S(\\d+)E(\\d+)", RegexOption.IGNORE_CASE)
-        document.select("div#download div.dar-tr_title > div").forEach { row ->
-            val text = row.text().trim()
-            val match = fileRegex.find(text) ?: return@forEach
-            val season = match.groupValues.getOrNull(1)?.toIntOrNull()
-            val episode = match.groupValues.getOrNull(2)?.toIntOrNull()
-            addEpisode(season, episode, "Episode ${episode ?: "?"}")
-        }
-
-        // 3) Parse schedule block: "Episode 3 - May 3, 2026"
-        val schedRegex = Regex("Episode\\s*(\\d+)", RegexOption.IGNORE_CASE)
-        document.select("div.ta-full_text1").forEach { block ->
-            block.text().lineSequence().forEach { line ->
-                val ep = schedRegex.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: return@forEach
-                addEpisode(1, ep)
-            }
-        }
-
-        val episodes = out.values.sortedWith(compareBy({ it.season ?: 1 }, { it.episode ?: 0 })).toMutableList()
-        if (episodes.isEmpty()) {
-            episodes.add(
-                newEpisode(LinkData(url).toJson()) {
-                    this.name = "Episode 1"
-                    this.episode = 1
-                    this.season = 1
+            return newTvSeriesLoadResponse(responseData?.meta?.name ?: title, url, TvType.TvSeries, episodeList) {
+                this.backgroundPosterUrl = background ?: bgposter
+                this.posterUrl = poster
+                try { this.logoUrl = logoPath } catch (_: Throwable) {}
+                this.year = year ?: responseData?.meta?.year?.toIntOrNull()
+                this.plot = buildString {
+                    append(description ?: descriptions)
+                    if (!audioLanguages.isNullOrBlank()) {
+                        append(" - Audio: ")
+                        append(audioLanguages)
+                    }
                 }
-            )
+                this.recommendations = recommendation
+                this.tags = genre
+                this.actors = castList
+                this.score = Score.from10(responseData?.meta?.imdbRating)
+                this.contentRating = responseData?.meta?.appExtras?.certification
+                addImdbId(imdbId)
+                addTMDbId(tmdbId)
+                addTrailer(trailer)
+            }
         }
-        return episodes
-    }
 
-    private fun Element.toRecommendation(): SearchResponse? {
-        val href = selectFirst("a.e-nowrap")?.attr("href") ?: return null
-        val title = selectFirst("a.e-nowrap")?.text()?.trim().orEmpty()
-        if (title.isBlank()) return null
-        val poster = fixUrlNull(selectFirst("img.poster")?.attr("src"))
-        return if (href.contains("/tv-series/")) {
-            newTvSeriesSearchResponse(title, fixUrl(href), TvType.TvSeries) { this.posterUrl = poster }
-        } else {
-            newMovieSearchResponse(title, fixUrl(href), TvType.Movie) { this.posterUrl = poster }
+        responseData?.meta?.appExtras?.certification?.let { Log.d("Phisher", it) }
+
+        return newMovieLoadResponse(responseData?.meta?.name ?: title, url, TvType.Movie, movieJson) {
+            this.backgroundPosterUrl = background ?: bgposter
+            this.posterUrl = poster
+            try { this.logoUrl = logoPath } catch (_: Throwable) {}
+            this.year = year ?: responseData?.meta?.year?.toIntOrNull()
+            this.plot = buildString {
+                append(description ?: descriptions)
+                if (!audioLanguages.isNullOrBlank()) {
+                    append(" - Audio: ")
+                    append(audioLanguages)
+                }
+            }
+            this.recommendations = recommendation
+            this.tags = genre
+            this.actors = castList
+            this.contentRating = responseData?.meta?.appExtras?.certification
+            this.score = Score.from10(responseData?.meta?.imdbRating)
+            addImdbId(imdbId)
+            addTMDbId(tmdbId)
+            addTrailer(trailer)
         }
     }
 
@@ -248,194 +341,79 @@ class CinemacityProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val parsed = AppUtils.parseJson<LinkData>(data)
-        val document = app.get(parsed.url).document
-        val playlist = extractPlaylist(document)
+        val obj = JSONObject(data)
 
-        if (playlist.isNotEmpty()) {
-            val selected = if (parsed.seasonIndex != null && parsed.episodeIndex != null) {
-                val season = playlist.getOrNull(parsed.seasonIndex)
-                season?.folder?.getOrNull(parsed.episodeIndex)
-            } else {
-                playlist.getOrNull(parsed.qualityIndex ?: 0)
+        obj.optJSONArray("subtitleTracks")?.let { subs ->
+            for (i in 0 until subs.length()) {
+                val s = subs.getJSONObject(i)
+                subtitleCallback(newSubtitleFile(s.getString("language"), s.getString("subtitleUrl")))
             }
+        }
 
-            val fileSet = selected?.file
-            if (!fileSet.isNullOrBlank()) {
-                val stream = parseFileSet(fileSet, selected.subtitle)
-                var hasLink = false
+        val streamUrls = mutableListOf<String>()
+        obj.optJSONArray("streams")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                arr.optString(i).takeIf { it.isNotBlank() }?.let { streamUrls += it }
+            }
+        }
+        if (streamUrls.isEmpty()) {
+            obj.optString("streamUrl").takeIf { it.isNotBlank() }?.let { streamUrls += it }
+        }
+        if (streamUrls.isEmpty()) return false
 
-                // 1) direct m3u8/mp4 if present
-                stream.directLinks.forEach { raw ->
-                    val link = fixUrl(raw)
-                    if (link.contains(".m3u8", true)) {
-                        generateM3u8(name, link, parsed.url).forEach(callback)
-                        hasLink = true
-                    } else if (link.contains(".mp4", true)) {
-                        callback(newExtractorLink(name, "$name MP4", link, INFER_TYPE) {
-                            this.referer = parsed.url
-                            this.quality = getQualityFromName(link)
-                        })
-                        hasLink = true
-                    } else {
-                        try {
-                            loadExtractor(link, parsed.url, subtitleCallback, callback)
-                            hasLink = true
-                        } catch (_: Throwable) {
-                        }
+        streamUrls.forEach { url ->
+            callback(
+                newExtractorLink(name, name, url, INFER_TYPE) {
+                    referer = mainUrl
+                    quality = extractQuality(url)
+                }
+            )
+        }
+        return true
+    }
+
+    private fun parseCredits(jsonText: String?): List<ActorData> {
+        if (jsonText.isNullOrBlank()) return emptyList()
+        val list = ArrayList<ActorData>()
+        val root = JSONObject(jsonText)
+        val castArr = root.optJSONArray("cast") ?: return list
+        for (i in 0 until castArr.length()) {
+            val c = castArr.optJSONObject(i) ?: continue
+            val name = c.optString("name").takeIf { it.isNotBlank() } ?: c.optString("original_name").orEmpty()
+            val profile = c.optString("profile_path").takeIf { it.isNotBlank() }?.let { "$TMDBIMAGEBASEURL$it" }
+            val character = c.optString("character").takeIf { it.isNotBlank() }
+            val actor = Actor(name, profile)
+            list += ActorData(actor, roleString = character)
+        }
+        return list
+    }
+
+    private fun extractQuality(url: String): Int {
+        return when {
+            url.contains("2160p") -> Qualities.P2160.value
+            url.contains("1440p") -> Qualities.P1440.value
+            url.contains("1080p") -> Qualities.P1080.value
+            url.contains("720p") -> Qualities.P720.value
+            url.contains("480p") -> Qualities.P480.value
+            url.contains("360p") -> Qualities.P360.value
+            else -> Qualities.Unknown.value
+        }
+    }
+
+    private fun parseSubtitles(raw: String?): JSONArray {
+        val tracks = JSONArray()
+        if (raw.isNullOrBlank()) return tracks
+        raw.split(",").forEach { entry ->
+            val match = Regex("""\[(.+?)](https?://.+)""").find(entry.trim())
+            if (match != null) {
+                tracks.put(
+                    JSONObject().apply {
+                        put("language", match.groupValues[1])
+                        put("subtitleUrl", match.groupValues[2])
                     }
-                }
-
-                // 2) Cinemacity internal downloader endpoint (same as website)
-                val newsId = Regex("/(\\d+)-").find(parsed.url)?.groupValues?.getOrNull(1)
-                val userHash = Regex("var\\s+dle_login_hash\\s*=\\s*'([^']+)'")
-                    .find(document.html())
-                    ?.groupValues?.getOrNull(1)
-
-                if (!newsId.isNullOrBlank() && !userHash.isNullOrBlank()) {
-                    val subtitles = stream.subtitles.joinToString(",")
-                    val audioList = if (stream.audio.isNotEmpty()) stream.audio else listOf("")
-                    val videoList = if (stream.video.isNotEmpty()) stream.video else listOf("")
-
-                    videoList.forEach { video ->
-                        audioList.forEach { audio ->
-                            if (video.isBlank() || audio.isBlank()) return@forEach
-                            val dlUrl = buildString {
-                                append(stream.base)
-                                append("?action=download")
-                                append("&video=${encode(video)}")
-                                append("&audio=${encode(audio)}")
-                                if (subtitles.isNotBlank()) append("&subtitle=${encode(subtitles)}")
-                                append("&name=${encode(buildDlName(parsed, video, audio))}")
-                                append("&news_id=${encode(newsId)}")
-                                append("&user_hash=${encode(userHash)}")
-                            }
-                            callback(
-                                newExtractorLink(name, "$name ${qualityFromPath(video)}", dlUrl, INFER_TYPE) {
-                                    this.referer = parsed.url
-                                    this.quality = getQualityFromName(video)
-                                }
-                            )
-                            hasLink = true
-                        }
-                    }
-                }
-
-                if (hasLink) return true
+                )
             }
         }
-
-        val html = document.html()
-
-        val rawCandidates = mutableListOf<String>()
-        rawCandidates += Regex("""file\s*:\s*["']([^"']+)["']""").findAll(html).map { it.groupValues[1] }.toList()
-        rawCandidates += Regex("""https?://[^\s"'<>]+\.m3u8[^\s"'<>]*""").findAll(html).map { it.value }.toList()
-        rawCandidates += Regex("""https?://[^\s"'<>]+""").findAll(html).map { it.value }.filter {
-            it.contains("stream", true) || it.contains("embed", true) || it.contains("m3u8", true)
-        }.toList()
-        val candidates = rawCandidates.map { fixUrl(it) }.distinct()
-
-        var found = false
-        candidates.forEach { link ->
-            try {
-                if (link.contains(".m3u8")) {
-                    generateM3u8(name, link, parsed.url).forEach(callback)
-                    found = true
-                } else {
-                    loadExtractor(link, parsed.url, subtitleCallback, callback)
-                    found = true
-                }
-            } catch (_: Throwable) {
-            }
-        }
-        return found
-    }
-
-    private fun extractPlaylist(document: org.jsoup.nodes.Document): List<PlaylistItem> {
-        val script = document.selectFirst("div[id^=player] + script") ?: return emptyList()
-        val scriptBody = script.html()
-        val b64 = Regex("""atob\(\s*["']([A-Za-z0-9+/=]+)["']\s*\)""")
-            .find(scriptBody)
-            ?.groupValues
-            ?.getOrNull(1)
-            ?: return emptyList()
-
-        val decoded = runCatching {
-            String(android.util.Base64.decode(b64, android.util.Base64.DEFAULT))
-        }.getOrNull() ?: return emptyList()
-
-        val fileRaw = Regex("""file\s*:\s*(['"])(.*?)\1\s*,\s*poster""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-            .find(decoded)
-            ?.groupValues
-            ?.getOrNull(2)
-            ?.let { unescapeJsString(it) }
-            ?: return emptyList()
-
-        if (!fileRaw.trim().startsWith("[")) return emptyList()
-        return runCatching { AppUtils.parseJson<List<PlaylistItem>>(fileRaw) }.getOrElse { emptyList() }
-    }
-
-    private fun unescapeJsString(input: String): String {
-        return input
-            .replace("\\\\", "\\")
-            .replace("\\/", "/")
-            .replace("\\\"", "\"")
-            .replace("\\'", "'")
-            .replace("\\n", "\n")
-            .replace("\\r", "\r")
-            .replace("\\t", "\t")
-    }
-
-    private fun parseFileSet(file: String, subtitle: String?): ParsedFileSet {
-        val parts = file.split(",").map { it.trim() }.filter { it.isNotBlank() }
-        val audio = parts.filter { it.contains(".m4a", true) && !it.contains(".urlset/master.m3u8", true) }
-        val video = parts.filter { it.contains(".mp4", true) && !it.contains(".urlset/master.m3u8", true) }
-        val m3u8 = parts.filter { it.contains(".m3u8", true) && !it.contains(".urlset/master.m3u8", true) }
-        val direct = (m3u8 + video).distinct()
-        val subtitles = subtitle.orEmpty().split(",").map { it.trim() }.filter { it.isNotBlank() }
-        return ParsedFileSet(base = parts.firstOrNull().orEmpty(), audio = audio, video = video, subtitles = subtitles, directLinks = direct)
-    }
-
-    private fun encode(value: String): String = java.net.URLEncoder.encode(value, "UTF-8")
-
-    private fun qualityFromPath(path: String): String {
-        return Regex("_(\\d{3,4}p)\\.mp4", RegexOption.IGNORE_CASE)
-            .find(path)
-            ?.groupValues
-            ?.getOrNull(1)
-            ?.uppercase(Locale.ROOT)
-            ?: "MP4"
-    }
-
-    private fun buildDlName(parsed: LinkData, video: String, audio: String): String {
-        val res = qualityFromPath(video).lowercase(Locale.ROOT)
-        val lang = Regex("_([^_/]+)\\.m4a", RegexOption.IGNORE_CASE).find(audio)?.groupValues?.getOrNull(1) ?: "audio"
-        return if (parsed.seasonIndex != null && parsed.episodeIndex != null) {
-            "S${parsed.seasonIndex + 1}E${parsed.episodeIndex + 1}.$res.$lang"
-        } else {
-            "movie.$res.$lang"
-        }
+        return tracks
     }
 }
-
-data class LinkData(
-    val url: String,
-    val seasonIndex: Int? = null,
-    val episodeIndex: Int? = null,
-    val qualityIndex: Int? = null,
-)
-
-data class PlaylistItem(
-    val title: String? = null,
-    val file: String? = null,
-    val subtitle: String? = null,
-    val folder: List<PlaylistItem>? = null,
-)
-
-data class ParsedFileSet(
-    val base: String,
-    val audio: List<String>,
-    val video: List<String>,
-    val subtitles: List<String>,
-    val directLinks: List<String>,
-)
