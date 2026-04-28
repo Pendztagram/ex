@@ -26,7 +26,9 @@ import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.M3u8Helper.Companion.generateM3u8
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
+import java.util.Locale
 
 class CinemacityProvider : MainAPI() {
     override var mainUrl = "https://cinemacity.cc"
@@ -148,6 +150,30 @@ class CinemacityProvider : MainAPI() {
     }
 
     private fun extractEpisodes(document: org.jsoup.nodes.Document, url: String): List<Episode> {
+        val playlist = extractPlaylist(document)
+        if (playlist.isNotEmpty() && playlist.any { !it.folder.isNullOrEmpty() }) {
+            val episodes = mutableListOf<Episode>()
+            playlist.forEachIndexed { sIdx, season ->
+                season.folder.orEmpty().forEachIndexed { eIdx, ep ->
+                    episodes.add(
+                        newEpisode(
+                            LinkData(
+                                url = url,
+                                seasonIndex = sIdx,
+                                episodeIndex = eIdx,
+                                qualityIndex = null,
+                            ).toJson()
+                        ) {
+                            this.name = ep.title?.ifBlank { null } ?: "Episode ${eIdx + 1}"
+                            this.season = sIdx + 1
+                            this.episode = eIdx + 1
+                        }
+                    )
+                }
+            }
+            if (episodes.isNotEmpty()) return episodes
+        }
+
         val out = linkedMapOf<String, Episode>()
 
         fun addEpisode(season: Int?, episode: Int?, name: String? = null) {
@@ -224,6 +250,81 @@ class CinemacityProvider : MainAPI() {
     ): Boolean {
         val parsed = AppUtils.parseJson<LinkData>(data)
         val document = app.get(parsed.url).document
+        val playlist = extractPlaylist(document)
+
+        if (playlist.isNotEmpty()) {
+            val selected = if (parsed.seasonIndex != null && parsed.episodeIndex != null) {
+                val season = playlist.getOrNull(parsed.seasonIndex)
+                season?.folder?.getOrNull(parsed.episodeIndex)
+            } else {
+                playlist.getOrNull(parsed.qualityIndex ?: 0)
+            }
+
+            val fileSet = selected?.file
+            if (!fileSet.isNullOrBlank()) {
+                val stream = parseFileSet(fileSet, selected.subtitle)
+                var hasLink = false
+
+                // 1) direct m3u8/mp4 if present
+                stream.directLinks.forEach { raw ->
+                    val link = fixUrl(raw)
+                    if (link.contains(".m3u8", true)) {
+                        generateM3u8(name, link, parsed.url).forEach(callback)
+                        hasLink = true
+                    } else if (link.contains(".mp4", true)) {
+                        callback(newExtractorLink(name, "$name MP4", link, INFER_TYPE) {
+                            this.referer = parsed.url
+                            this.quality = getQualityFromName(link)
+                        })
+                        hasLink = true
+                    } else {
+                        try {
+                            loadExtractor(link, parsed.url, subtitleCallback, callback)
+                            hasLink = true
+                        } catch (_: Throwable) {
+                        }
+                    }
+                }
+
+                // 2) Cinemacity internal downloader endpoint (same as website)
+                val newsId = Regex("/(\\d+)-").find(parsed.url)?.groupValues?.getOrNull(1)
+                val userHash = Regex("var\\s+dle_login_hash\\s*=\\s*'([^']+)'")
+                    .find(document.html())
+                    ?.groupValues?.getOrNull(1)
+
+                if (!newsId.isNullOrBlank() && !userHash.isNullOrBlank()) {
+                    val subtitles = stream.subtitles.joinToString(",")
+                    val audioList = if (stream.audio.isNotEmpty()) stream.audio else listOf("")
+                    val videoList = if (stream.video.isNotEmpty()) stream.video else listOf("")
+
+                    videoList.forEach { video ->
+                        audioList.forEach { audio ->
+                            if (video.isBlank() || audio.isBlank()) return@forEach
+                            val dlUrl = buildString {
+                                append(stream.base)
+                                append("?action=download")
+                                append("&video=${encode(video)}")
+                                append("&audio=${encode(audio)}")
+                                if (subtitles.isNotBlank()) append("&subtitle=${encode(subtitles)}")
+                                append("&name=${encode(buildDlName(parsed, video, audio))}")
+                                append("&news_id=${encode(newsId)}")
+                                append("&user_hash=${encode(userHash)}")
+                            }
+                            callback(
+                                newExtractorLink(name, "$name ${qualityFromPath(video)}", dlUrl, INFER_TYPE) {
+                                    this.referer = parsed.url
+                                    this.quality = getQualityFromName(video)
+                                }
+                            )
+                            hasLink = true
+                        }
+                    }
+                }
+
+                if (hasLink) return true
+            }
+        }
+
         val html = document.html()
 
         val rawCandidates = mutableListOf<String>()
@@ -249,8 +350,92 @@ class CinemacityProvider : MainAPI() {
         }
         return found
     }
+
+    private fun extractPlaylist(document: org.jsoup.nodes.Document): List<PlaylistItem> {
+        val script = document.selectFirst("div[id^=player] + script") ?: return emptyList()
+        val scriptBody = script.html()
+        val b64 = Regex("""atob\(\s*["']([A-Za-z0-9+/=]+)["']\s*\)""")
+            .find(scriptBody)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?: return emptyList()
+
+        val decoded = runCatching {
+            String(android.util.Base64.decode(b64, android.util.Base64.DEFAULT))
+        }.getOrNull() ?: return emptyList()
+
+        val fileRaw = Regex("""file\s*:\s*(['"])(.*?)\1\s*,\s*poster""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            .find(decoded)
+            ?.groupValues
+            ?.getOrNull(2)
+            ?.let { unescapeJsString(it) }
+            ?: return emptyList()
+
+        if (!fileRaw.trim().startsWith("[")) return emptyList()
+        return runCatching { AppUtils.parseJson<List<PlaylistItem>>(fileRaw) }.getOrElse { emptyList() }
+    }
+
+    private fun unescapeJsString(input: String): String {
+        return input
+            .replace("\\\\", "\\")
+            .replace("\\/", "/")
+            .replace("\\\"", "\"")
+            .replace("\\'", "'")
+            .replace("\\n", "\n")
+            .replace("\\r", "\r")
+            .replace("\\t", "\t")
+    }
+
+    private fun parseFileSet(file: String, subtitle: String?): ParsedFileSet {
+        val parts = file.split(",").map { it.trim() }.filter { it.isNotBlank() }
+        val audio = parts.filter { it.contains(".m4a", true) && !it.contains(".urlset/master.m3u8", true) }
+        val video = parts.filter { it.contains(".mp4", true) && !it.contains(".urlset/master.m3u8", true) }
+        val m3u8 = parts.filter { it.contains(".m3u8", true) && !it.contains(".urlset/master.m3u8", true) }
+        val direct = (m3u8 + video).distinct()
+        val subtitles = subtitle.orEmpty().split(",").map { it.trim() }.filter { it.isNotBlank() }
+        return ParsedFileSet(base = parts.firstOrNull().orEmpty(), audio = audio, video = video, subtitles = subtitles, directLinks = direct)
+    }
+
+    private fun encode(value: String): String = java.net.URLEncoder.encode(value, "UTF-8")
+
+    private fun qualityFromPath(path: String): String {
+        return Regex("_(\\d{3,4}p)\\.mp4", RegexOption.IGNORE_CASE)
+            .find(path)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.uppercase(Locale.ROOT)
+            ?: "MP4"
+    }
+
+    private fun buildDlName(parsed: LinkData, video: String, audio: String): String {
+        val res = qualityFromPath(video).lowercase(Locale.ROOT)
+        val lang = Regex("_([^_/]+)\\.m4a", RegexOption.IGNORE_CASE).find(audio)?.groupValues?.getOrNull(1) ?: "audio"
+        return if (parsed.seasonIndex != null && parsed.episodeIndex != null) {
+            "S${parsed.seasonIndex + 1}E${parsed.episodeIndex + 1}.$res.$lang"
+        } else {
+            "movie.$res.$lang"
+        }
+    }
 }
 
 data class LinkData(
     val url: String,
+    val seasonIndex: Int? = null,
+    val episodeIndex: Int? = null,
+    val qualityIndex: Int? = null,
+)
+
+data class PlaylistItem(
+    val title: String? = null,
+    val file: String? = null,
+    val subtitle: String? = null,
+    val folder: List<PlaylistItem>? = null,
+)
+
+data class ParsedFileSet(
+    val base: String,
+    val audio: List<String>,
+    val video: List<String>,
+    val subtitles: List<String>,
+    val directLinks: List<String>,
 )
