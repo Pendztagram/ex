@@ -144,23 +144,37 @@ class YflixProvider : MainAPI() {
                 if (info.season == null) {
                     add("https://vidsrc.to/embed/movie/$tmdb")
                     add("https://vidsrc.xyz/embed/movie/$tmdb")
+                    add("https://vidsrc.net/embed/movie/$tmdb")
+                    add("https://vidsrc.su/embed/movie/$tmdb")
+                    add("https://vidsrc.cc/v2/embed/movie/$tmdb")
+                    add("https://www.2embed.cc/embed/$tmdb")
+                    add("https://www.2embed.skin/embed/$tmdb")
                 } else {
                     add("https://vidsrc.to/embed/tv/$tmdb/${info.season}/${info.episode}")
                     add("https://vidsrc.xyz/embed/tv/$tmdb/${info.season}/${info.episode}")
+                    add("https://vidsrc.net/embed/tv/$tmdb/${info.season}/${info.episode}")
+                    add("https://vidsrc.su/embed/tv/$tmdb/${info.season}/${info.episode}")
+                    add("https://vidsrc.cc/v2/embed/tv/$tmdb/${info.season}/${info.episode}")
+                    add("https://www.2embed.cc/embedtv/$tmdb&s=${info.season}&e=${info.episode}")
+                    add("https://www.2embed.skin/embedtv/$tmdb&s=${info.season}&e=${info.episode}")
                 }
             }
             info.imdbId?.let { imdb ->
                 if (info.season == null) {
                     add("https://vidsrc.xyz/embed/movie?imdb=$imdb")
+                    add("https://vidsrc.net/embed/movie?imdb=$imdb")
+                    add("https://vidsrc.su/embed/movie?imdb=$imdb")
                 } else {
                     add("https://vidsrc.xyz/embed/tv?imdb=$imdb&season=${info.season}&episode=${info.episode}")
+                    add("https://vidsrc.net/embed/tv?imdb=$imdb&season=${info.season}&episode=${info.episode}")
+                    add("https://vidsrc.su/embed/tv?imdb=$imdb&season=${info.season}&episode=${info.episode}")
                 }
             }
         }.distinct()
 
         for (embed in fallbackEmbeds) {
             runCatching {
-                loadExtractor(embed, yflixApi, subtitleCallback, ::emitLink)
+                loadExtractor(embed, baseReferer(embed), subtitleCallback, ::emitLink)
             }
             if (emitted.isNotEmpty()) return true
         }
@@ -347,6 +361,13 @@ class YflixProvider : MainAPI() {
         }
         Regex("""https?://[^"'\\s]+""", RegexOption.IGNORE_CASE).find(trimmed)?.value?.let { return it }
         return null
+    }
+
+    private fun baseReferer(url: String): String {
+        return runCatching {
+            val uri = java.net.URI(url)
+            "${uri.scheme}://${uri.host}/"
+        }.getOrDefault("$yflixApi/")
     }
 
     private suspend fun buildEpisodes(tmdbId: Int, imdbId: String?): List<Episode> {

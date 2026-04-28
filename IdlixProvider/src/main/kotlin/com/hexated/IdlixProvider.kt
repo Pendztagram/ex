@@ -559,14 +559,33 @@ class IdlixProvider : MainAPI() {
         val trimmed = raw.trim()
         if (trimmed.startsWith("http", ignoreCase = true)) return trimmed
 
-        // URL inside quotes
-        Regex("""""'(https?://[^""']+)""'""", RegexOption.IGNORE_CASE).find(trimmed)?.groupValues?.getOrNull(1)?.let { return it }
-        // Relative path inside quotes
-        Regex("""""'(/(?:embed|player|video|play|e|v|watch)[^""']*)""'""", RegexOption.IGNORE_CASE).find(trimmed)?.groupValues?.getOrNull(1)?.let { return it }
+        // URL or relative path inside single/double quotes
+        Regex("""["'](https?://[^"'\\s]+)["']""", RegexOption.IGNORE_CASE)
+            .find(trimmed)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.let { return it }
+        Regex("""["'](/(?:embed|player|video|play|e|v|watch)[^"'\\s]*)["']""", RegexOption.IGNORE_CASE)
+            .find(trimmed)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.let { return it }
+
+        // `embedUrl: '/path'` style script object
+        Regex("""embedUrl\s*[:=]\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+            .find(trimmed)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.takeIf { it.startsWith("http", true) || it.startsWith("/") }
+            ?.let { return it }
 
         val normalized = trimmed.replace("\\/", "/")
-        val direct = Regex("""https?://[^""'\s]+""", RegexOption.IGNORE_CASE).find(normalized)?.value
+        val direct = Regex("""https?://[^"'\s]+""", RegexOption.IGNORE_CASE).find(normalized)?.value
         if (!direct.isNullOrBlank()) return direct
+        val relative = Regex("""/(?:embed|player|video|play|e|v|watch)[^"'\s]*""", RegexOption.IGNORE_CASE)
+            .find(normalized)
+            ?.value
+        if (!relative.isNullOrBlank()) return relative
 
         val json = runCatching { JSONObject(trimmed) }.getOrNull() ?: return null
 
@@ -840,4 +859,3 @@ fun getSearchQuality(check: String?): SearchQuality? {
     for ((regex, quality) in patterns) if (regex.containsMatchIn(u)) return quality
     return null
 }
-
