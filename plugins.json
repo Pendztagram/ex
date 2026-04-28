@@ -306,10 +306,10 @@
     },
     {
         "iconUrl": "https://t0.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://idlixian.com&size=16",
-        "fileHash": "sha256-320327acae1e8e7344906cda08185d4c7e86c0a077fe18d9c4c031b473d6646a",
+        "fileHash": "sha256-c541c519d19aa90edbed7101729b53045e8d708ed2d61886648478ec02ba9863",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 89090,
+        "fileSize": 89288,
         "status": 1,
         "language": "id",
         "authors": [
@@ -852,10 +852,10 @@
     },
     {
         "iconUrl": "https://yflix.to/favicon.ico",
-        "fileHash": "sha256-69b0d1429f473cc4f59d9d99fd7f66a54fb2bf1de0f2a823d25c1a33ff05f5af",
+        "fileHash": "sha256-9c058090a9f0f3e668129277b4d9b875d20a4aa2670995f3156222bb3be77135",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 45362,
+        "fileSize": 45918,
         "status": 1,
         "language": "en",
         "authors": [
