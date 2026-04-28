@@ -66,7 +66,13 @@ class YflixProvider : MainAPI() {
                 title,
                 "$mainUrl/movie/${media.id}",
                 TvType.Movie,
-                LinkData(tmdbId = media.id, imdbId = detail.externalIds?.imdbId, type = "movie").toJson()
+                LinkData(
+                    tmdbId = media.id,
+                    imdbId = detail.externalIds?.imdbId,
+                    type = "movie",
+                    title = title,
+                    year = detail.releaseDate?.substringBefore("-")?.toIntOrNull()
+                ).toJson()
             ) {
                 this.posterUrl = detail.posterPath.toPosterUrl()
                 this.plot = detail.overview
@@ -120,44 +126,118 @@ class YflixProvider : MainAPI() {
             for (pattern in patterns) {
                 val url = "$yflixApi/${pattern.format(id)}"
                 val res = runCatching { app.get(url) }.getOrNull() ?: continue
-                val doc = res.document
-
-                val picked = listOfNotNull(
-                    doc.selectFirst("iframe[src]")?.attr("abs:src"),
-                    doc.selectFirst("iframe[data-src]")?.attr("abs:data-src"),
-                    doc.selectFirst("video source[src], source[src]")?.attr("abs:src"),
-                    doc.selectFirst("video[src]")?.attr("abs:src"),
-                    Regex("""https?://[^"'\\s]+\\.(?:m3u8|mp4)[^"'\\s]*""", RegexOption.IGNORE_CASE)
-                        .find(doc.select("script").joinToString("\n") { it.data() })?.value,
-                ).map { it?.trim().orEmpty() }
-                    .map { if (it.startsWith("//")) "https:$it" else it }
-                    .firstOrNull { it.startsWith("http", true) }
-                    ?: continue
-
-                when {
-                    picked.contains(".m3u8", true) -> {
-                        M3u8Helper.generateM3u8("Yflix", picked, "$yflixApi/").forEach(::emitLink)
-                        return emitted.isNotEmpty()
-                    }
-
-                    picked.contains(".mp4", true) -> {
-                        emitLink(
-                            newExtractorLink("Yflix", "Yflix", picked, INFER_TYPE) {
-                                referer = "$yflixApi/"
-                            }
-                        )
-                        return emitted.isNotEmpty()
-                    }
-
-                    else -> {
-                        loadExtractor(picked, "$yflixApi/", subtitleCallback, ::emitLink)
-                        if (emitted.isNotEmpty()) return true
-                    }
-                }
+                val picked = extractPlayableUrl(res.text, res.document) ?: continue
+                if (tryEmitPicked(picked, "$yflixApi/", subtitleCallback, ::emitLink, emitted)) return true
             }
         }
 
+        for (watchUrl in resolveWatchCandidates(info)) {
+            val res = runCatching { app.get(watchUrl, referer = "$yflixApi/") }.getOrNull() ?: continue
+            val picked = extractPlayableUrl(res.text, res.document) ?: continue
+            if (tryEmitPicked(picked, watchUrl, subtitleCallback, ::emitLink, emitted)) return true
+        }
+
+        val fallbackEmbeds = buildList {
+            info.tmdbId?.let { tmdb ->
+                if (info.season == null) {
+                    add("https://vidsrc.to/embed/movie/$tmdb")
+                    add("https://vidsrc.xyz/embed/movie/$tmdb")
+                } else {
+                    add("https://vidsrc.to/embed/tv/$tmdb/${info.season}/${info.episode}")
+                    add("https://vidsrc.xyz/embed/tv/$tmdb/${info.season}/${info.episode}")
+                }
+            }
+            info.imdbId?.let { imdb ->
+                if (info.season == null) {
+                    add("https://vidsrc.xyz/embed/movie?imdb=$imdb")
+                } else {
+                    add("https://vidsrc.xyz/embed/tv?imdb=$imdb&season=${info.season}&episode=${info.episode}")
+                }
+            }
+        }.distinct()
+
+        for (embed in fallbackEmbeds) {
+            runCatching {
+                loadExtractor(embed, yflixApi, subtitleCallback, ::emitLink)
+            }
+            if (emitted.isNotEmpty()) return true
+        }
+
         return emitted.isNotEmpty()
+    }
+
+    private suspend fun tryEmitPicked(
+        picked: String,
+        referer: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+        emitted: Set<String>
+    ): Boolean {
+        when {
+            picked.contains(".m3u8", true) -> {
+                M3u8Helper.generateM3u8("Yflix", picked, "$yflixApi/").forEach(callback)
+                return emitted.isNotEmpty()
+            }
+
+            picked.contains(".mp4", true) -> {
+                callback(
+                    newExtractorLink("Yflix", "Yflix", picked, INFER_TYPE) {
+                        this.referer = referer
+                    }
+                )
+                return emitted.isNotEmpty()
+            }
+
+            else -> {
+                runCatching {
+                    loadExtractor(picked, referer, subtitleCallback, callback)
+                }
+                return emitted.isNotEmpty()
+            }
+        }
+    }
+
+    private suspend fun resolveWatchCandidates(info: LinkData): List<String> {
+        val title = info.title?.takeIf { it.isNotBlank() } ?: return emptyList()
+        val doc = runCatching {
+            app.get("$yflixApi/filter?keyword=${title.urlEncoded()}").document
+        }.getOrNull() ?: return emptyList()
+
+        val target = normalizeTitle(title)
+        return doc.select("a[href*=/watch/]")
+            .mapNotNull { a ->
+                val href = a.attr("abs:href").ifBlank { a.attr("href") }
+                if (href.isBlank()) return@mapNotNull null
+                val cardTitle = a.attr("title")
+                    .ifBlank { a.selectFirst(".title")?.text().orEmpty() }
+                    .ifBlank { a.text() }
+                Triple(href, normalizeTitle(cardTitle), cardTitle)
+            }
+            .filter { (href, _, _) -> href.contains("/watch/") }
+            .sortedBy { (_, norm, _) ->
+                when {
+                    norm == target -> 0
+                    norm.contains(target) || target.contains(norm) -> 1
+                    else -> 2 + kotlin.math.abs(norm.length - target.length)
+                }
+            }
+            .map { it.first }
+            .distinct()
+            .take(8)
+    }
+
+    private fun extractPlayableUrl(html: String, doc: org.jsoup.nodes.Document): String? {
+        val scripts = doc.select("script").joinToString("\n") { it.data() } + "\n" + html
+        return listOfNotNull(
+            doc.selectFirst("iframe[src]")?.attr("abs:src"),
+            doc.selectFirst("iframe[data-src]")?.attr("abs:data-src"),
+            doc.selectFirst("video source[src], source[src]")?.attr("abs:src"),
+            doc.selectFirst("video[src]")?.attr("abs:src"),
+            Regex("""https?://[^"'\\s]+\\.(?:m3u8|mp4)[^"'\\s]*""", RegexOption.IGNORE_CASE).find(scripts)?.value,
+            Regex("""https?://[^"'\\s]+/(?:embed|watch)/[^"'\\s]+""", RegexOption.IGNORE_CASE).find(scripts)?.value,
+        ).map { it.trim() }
+            .map { if (it.startsWith("//")) "https:$it" else it }
+            .firstOrNull { it.startsWith("http", true) }
     }
 
     private suspend fun buildEpisodes(tmdbId: Int, imdbId: String?): List<Episode> {
@@ -177,7 +257,9 @@ class YflixProvider : MainAPI() {
                         imdbId = imdbId,
                         type = "tv",
                         season = seasonNumber,
-                        episode = episodeNumber
+                        episode = episodeNumber,
+                        title = detail.name,
+                        year = detail.firstAirDate?.substringBefore("-")?.toIntOrNull()
                     ).toJson()
                 ) {
                     this.name = episode.name ?: "Episode $episodeNumber"
@@ -239,6 +321,13 @@ class YflixProvider : MainAPI() {
 
     private fun String.urlEncoded(): String = URLEncoder.encode(this, "UTF-8")
 
+    private fun normalizeTitle(value: String): String {
+        return value.lowercase()
+            .replace(Regex("""[^\p{L}\p{N}\s]"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+    }
+
     data class SiteMedia(val type: String, val id: Int)
 
     data class LinkData(
@@ -247,6 +336,8 @@ class YflixProvider : MainAPI() {
         val type: String? = null,
         val season: Int? = null,
         val episode: Int? = null,
+        val title: String? = null,
+        val year: Int? = null,
     )
 
     data class TmdbResults(
