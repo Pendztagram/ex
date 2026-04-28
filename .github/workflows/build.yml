@@ -55,10 +55,18 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/src
           if [ -n "$BSTATION_COOKIE" ]; then
-            printf '%s' "$BSTATION_COOKIE" > BstationProvider/.bstation.cookies
+            if [ -d "BstationProvider" ]; then
+              printf '%s' "$BSTATION_COOKIE" > BstationProvider/.bstation.cookies
+            else
+              echo "Warning: BstationProvider directory not found, skipping BSTATION_COOKIE"
+            fi
           fi
           if [ -n "$DRAKORID_COOKIE" ]; then
-            printf '%s' "$DRAKORID_COOKIE" > DrakoridProvider/.drakorid.cookies
+            if [ -d "DrakoridProvider" ]; then
+              printf '%s' "$DRAKORID_COOKIE" > DrakoridProvider/.drakorid.cookies
+            else
+              echo "Warning: DrakoridProvider directory not found, skipping DRAKORID_COOKIE"
+            fi
           fi
           echo TMDB_API=${{ secrets.TMDB_API }} >> local.properties
           echo DUMP_API=${{ secrets.DUMP_API }} >> local.properties
