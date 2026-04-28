@@ -306,10 +306,10 @@
     },
     {
         "iconUrl": "https://t0.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://idlixian.com&size=16",
-        "fileHash": "sha256-c541c519d19aa90edbed7101729b53045e8d708ed2d61886648478ec02ba9863",
+        "fileHash": "sha256-9ae8fe5b72a58e313ba1e33bec29ae0163d6ce9bea9b1d559a30440dd252a36c",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 89288,
+        "fileSize": 52841,
         "status": 1,
         "language": "id",
         "authors": [
