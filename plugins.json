@@ -195,6 +195,27 @@
         "name": "Donghub"
     },
     {
+        "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://drama.sansekai.my.id&size=%size%",
+        "fileHash": "sha256-a2eb135ac9448e1c60a3bc21f647a9dae2119e6c198687a3dcdecb0f25ce64a2",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/Pendztagram/ex",
+        "fileSize": 57887,
+        "status": 1,
+        "language": "id",
+        "authors": [
+            "duro92"
+        ],
+        "tvTypes": [
+            "TvSeries",
+            "AsianDrama"
+        ],
+        "version": 1,
+        "internalName": "Dracin",
+        "description": "Dracin short drama provider via Sansekai API",
+        "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/Dracin.cs3",
+        "name": "Dracin"
+    },
+    {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://justilien.com&size=%size%",
         "fileHash": "sha256-9827f4a515f5c1c84e41e9fb2867e7c170be064f54ab12511fcbcb5fa4a0c62a",
         "apiVersion": 1,
