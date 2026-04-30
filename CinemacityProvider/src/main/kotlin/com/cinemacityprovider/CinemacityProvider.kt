@@ -235,7 +235,12 @@ class CinemacityProvider : MainAPI() {
 
         val episodeList = mutableListOf<Episode>()
 
-        val movieJson = fileArray.takeIf { it.length() > 0 }?.toString()
+        val movieJson = fileArray.takeIf { it.length() > 0 }?.let { playlist ->
+            JSONObject().apply {
+                put("pageUrl", url)
+                put("playlist", playlist)
+            }.toString()
+        }
 
         if (tvtype == TvType.TvSeries) {
             for (i in 0 until fileArray.length()) {
@@ -319,28 +324,36 @@ class CinemacityProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val obj = JSONObject(data)
+        val trimmed = data.trim()
+        if (trimmed.isBlank()) return false
 
-        val rawFile = obj.optString("file")
+        val playlist = when {
+            trimmed.startsWith("[") -> JSONArray(trimmed)
+            else -> runCatching { JSONObject(trimmed).optJSONArray("playlist") }.getOrNull()
+        }
+        val obj = if (trimmed.startsWith("{")) JSONObject(trimmed) else null
+        val pageUrl = obj?.optString("pageUrl")?.takeIf { it.isNotBlank() }
+
+        val rawFile = obj?.optString("file").orEmpty()
         if (rawFile.isNotBlank()) {
-            val baseUrl = obj.optString("pageUrl").takeIf { it.isNotBlank() } ?: mainUrl
-            val subtitleRaw = obj.optString("subtitle")
+            val baseUrl = pageUrl ?: mainUrl
+            val subtitleRaw = obj?.optString("subtitle")
             return emitFileSetLinks(baseUrl, rawFile, subtitleRaw, subtitleCallback, callback)
         }
 
-        if (obj.has("0") || data.trim().startsWith("[")) {
-            val playlist = if (data.trim().startsWith("[")) JSONArray(data) else JSONArray().apply { put(obj) }
+        if (playlist != null) {
             val emitted = mutableSetOf<String>()
             for (i in 0 until playlist.length()) {
                 val item = playlist.optJSONObject(i) ?: continue
-                val ok = emitFileSetLinks(mainUrl, item.optString("file"), item.optString("subtitle"), subtitleCallback) { link ->
+                val itemBaseUrl = item.optString("pageUrl").takeIf { it.isNotBlank() } ?: pageUrl ?: mainUrl
+                val ok = emitFileSetLinks(itemBaseUrl, item.optString("file"), item.optString("subtitle"), subtitleCallback) { link ->
                     if (emitted.add(link.url)) callback(link)
                 }
                 if (ok) return true
             }
         }
 
-        obj.optJSONArray("subtitleTracks")?.let { subs ->
+        obj?.optJSONArray("subtitleTracks")?.let { subs ->
             for (i in 0 until subs.length()) {
                 val s = subs.getJSONObject(i)
                 subtitleCallback(newSubtitleFile(s.getString("language"), s.getString("subtitleUrl")))
@@ -348,13 +361,13 @@ class CinemacityProvider : MainAPI() {
         }
 
         val streamUrls = mutableListOf<String>()
-        obj.optJSONArray("streams")?.let { arr ->
+        obj?.optJSONArray("streams")?.let { arr ->
             for (i in 0 until arr.length()) {
                 arr.optString(i).takeIf { it.isNotBlank() }?.let { streamUrls += it }
             }
         }
         if (streamUrls.isEmpty()) {
-            obj.optString("streamUrl").takeIf { it.isNotBlank() }?.let { streamUrls += it }
+            obj?.optString("streamUrl").takeIf { !it.isNullOrBlank() }?.let { streamUrls += it }
         }
         if (streamUrls.isEmpty()) return false
 
