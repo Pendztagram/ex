@@ -152,10 +152,10 @@
     },
     {
         "iconUrl": "https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/Icons/Cinemacity.png",
-        "fileHash": "sha256-073f46fdd2867e1b2da2deb6e16ff8eb4d1fd2be80255453178d56d7e0bbeadb",
+        "fileHash": "sha256-0e94129787bb1e4e4330850d8b507afba65ef47e602f42e66f02cdbe1961db0b",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 39718,
+        "fileSize": 47376,
         "status": 1,
         "language": "en",
         "authors": [
@@ -196,10 +196,10 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://drama.sansekai.my.id&size=%size%",
-        "fileHash": "sha256-f18701993035cc4edcaee703a1437201604481bb1282f2ec3180ae998587315e",
+        "fileHash": "sha256-41e725482248b5af241d6f13b677ec2573bae139906e7b3763e1829d916ade8f",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 34224,
+        "fileSize": 39916,
         "status": 1,
         "language": "id",
         "authors": [
