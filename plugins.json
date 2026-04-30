@@ -196,10 +196,10 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://drama.sansekai.my.id&size=%size%",
-        "fileHash": "sha256-a997591f6119d710d3ea6e7c3050a5758cbac26de13cf8f21f6bde0f80676077",
+        "fileHash": "sha256-f18701993035cc4edcaee703a1437201604481bb1282f2ec3180ae998587315e",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 29478,
+        "fileSize": 34224,
         "status": 1,
         "language": "id",
         "authors": [
