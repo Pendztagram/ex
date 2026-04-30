@@ -8,5 +8,6 @@ import com.lagradost.cloudstream3.plugins.Plugin
 class AnimexinProviderPlugin : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(AnimexinProvider())
+        registerExtractorAPI(Animexinfansub())
     }
 }
