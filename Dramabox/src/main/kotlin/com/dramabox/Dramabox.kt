@@ -9,12 +9,21 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class Dramabox : MainAPI() {
     private fun b64(v: String): String = String(java.util.Base64.getDecoder().decode(v))
     override var mainUrl = b64("aHR0cHM6Ly9kcmFtYS5zYW5zZWthaS5teS5pZA==")
     private val apiUrl = b64("aHR0cHM6Ly9hcGkuc2Fuc2VrYWkubXkuaWQvYXBp")
     private val cloudflareInterceptor by lazy { CloudflareKiller() }
+    private val rateMutex = Mutex()
+    private var lastRequestAt = 0L
+    private val minRequestGapMs = 1200L
+    private val listCache = LinkedHashMap<String, Pair<Long, String>>()
+    private val listCacheTtlMs = 45_000L
+    private val listCacheSize = 24
 
     override var name = "DramaBox"
     override var lang = "id"
@@ -121,6 +130,10 @@ class Dramabox : MainAPI() {
     private suspend inline fun <reified T> requestJson(url: String): T? {
         repeat(2) { attempt ->
             runCatching {
+                val bodyFromCache = takeCached(url)
+                if (bodyFromCache != null) return parseJson<T>(bodyFromCache)
+
+                throttleRequest()
                 // API domain is usually reachable directly; avoid long Cloudflare wait on first attempt.
                 val plain = app.get(
                     url,
@@ -130,9 +143,11 @@ class Dramabox : MainAPI() {
                 )
                 val plainBody = plain.text
                 if (!looksLikeChallenge(plainBody)) {
+                    putCached(url, plainBody)
                     return parseJson<T>(plainBody)
                 }
 
+                throttleRequest()
                 val body = app.get(
                     url,
                     headers = interceptHeaders,
@@ -141,9 +156,10 @@ class Dramabox : MainAPI() {
                     timeout = 25L
                 ).text
                 if (looksLikeChallenge(body)) return null
+                putCached(url, body)
                 return parseJson<T>(body)
             }
-            if (attempt == 0) kotlinx.coroutines.delay(400)
+            if (attempt == 0) delay(400)
         }
         return null
     }
@@ -171,6 +187,41 @@ class Dramabox : MainAPI() {
             "/cdn-cgi/challenge-platform/"
         )
         return hints.any { preview.contains(it, ignoreCase = true) }
+    }
+
+    private suspend fun throttleRequest() {
+        rateMutex.withLock {
+            val now = System.currentTimeMillis()
+            val waitMs = minRequestGapMs - (now - lastRequestAt)
+            if (waitMs > 0) delay(waitMs)
+            lastRequestAt = System.currentTimeMillis()
+        }
+    }
+
+    private fun takeCached(url: String): String? {
+        val now = System.currentTimeMillis()
+        val hit = listCache[url] ?: return null
+        if ((now - hit.first) > listCacheTtlMs) {
+            listCache.remove(url)
+            return null
+        }
+        return hit.second
+    }
+
+    private fun putCached(url: String, body: String) {
+        val isListLike = url.contains("/dramabox/foryou") ||
+            url.contains("/dramabox/latest") ||
+            url.contains("/dramabox/trending") ||
+            url.contains("/dramabox/vip") ||
+            url.contains("/dramabox/dubindo") ||
+            url.contains("/dramabox/search")
+        if (!isListLike) return
+        if (body.isBlank() || looksLikeChallenge(body)) return
+        listCache[url] = System.currentTimeMillis() to body
+        while (listCache.size > listCacheSize) {
+            val firstKey = listCache.keys.firstOrNull() ?: break
+            listCache.remove(firstKey)
+        }
     }
 
     private fun DramaItem.toSearch(): SearchResponse? {
