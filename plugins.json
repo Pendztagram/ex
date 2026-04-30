@@ -66,10 +66,10 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://animexin.dev&size=%size%",
-        "fileHash": "sha256-62c0f7213e41152442c72e49686396d0d16ed8f965270c08a8257126a518be52",
+        "fileHash": "sha256-316abe8dfeef0b538a7f16deba4143958aa02f307182819845f719df153c72bb",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 23831,
+        "fileSize": 26983,
         "status": 1,
         "language": "id",
         "authors": [
