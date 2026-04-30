@@ -84,13 +84,28 @@ class CinemacityProvider : MainAPI() {
         return newHomePageResponse(request.name, home, true)
     }
 
-    private suspend fun requestDocument(url: String) =
+    private suspend fun requestDocument(url: String) = requestPage(url).document
+
+    private suspend fun requestPage(url: String) =
         app.get(
             url,
-            interceptor = cloudflareInterceptor,
             headers = requestHeaders,
             referer = mainUrl
-        ).document
+        ).takeUnless { isCloudflareChallenge(it.text) }
+            ?: app.get(
+                url,
+                interceptor = cloudflareInterceptor,
+                headers = requestHeaders,
+                referer = mainUrl
+            )
+
+    private fun isCloudflareChallenge(html: String): Boolean {
+        val body = html.lowercase()
+        return body.contains("just a moment") ||
+            body.contains("/cdn-cgi/challenge-platform/") ||
+            body.contains("__cf_chl_tk") ||
+            body.contains("cf-browser-verification")
+    }
 
     private fun Element.toSearchResult(): SearchResponse? {
         val anchor = children().firstOrNull { it.tagName() == "a" && it.hasAttr("href") }
@@ -125,23 +140,15 @@ class CinemacityProvider : MainAPI() {
 
     override suspend fun search(query: String, page: Int): SearchResponseList {
         val encodedQuery = URLEncoder.encode(query, StandardCharsets.UTF_8.toString())
-        val doc = app.get(
-            "$mainUrl/?do=search&subaction=search&search_start=0&full_search=0&story=$encodedQuery",
-            interceptor = cloudflareInterceptor,
-            headers = requestHeaders,
-            referer = mainUrl
+        val doc = requestPage(
+            "$mainUrl/?do=search&subaction=search&search_start=0&full_search=0&story=$encodedQuery"
         ).document
         val res = doc.select("div.dar-short_item").mapNotNull { it.toSearchResult() }
         return res.toNewSearchResponseList()
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val page = app.get(
-            url,
-            interceptor = cloudflareInterceptor,
-            headers = requestHeaders,
-            referer = mainUrl
-        )
+        val page = requestPage(url)
         val doc = page.document
 
         val ogTitle = doc.selectFirst("meta[property=og:title]")?.attr("content").orEmpty()
