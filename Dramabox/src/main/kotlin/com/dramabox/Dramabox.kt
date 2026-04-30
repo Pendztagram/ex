@@ -11,8 +11,9 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class Dramabox : MainAPI() {
-    override var mainUrl = "https://drama.sansekai.my.id"
-    private val apiUrl = "https://api.sansekai.my.id/api"
+    private fun b64(v: String): String = String(java.util.Base64.getDecoder().decode(v))
+    override var mainUrl = b64("aHR0cHM6Ly9kcmFtYS5zYW5zZWthaS5teS5pZA==")
+    private val apiUrl = b64("aHR0cHM6Ly9hcGkuc2Fuc2VrYWkubXkuaWQvYXBp")
     private val cloudflareInterceptor by lazy { CloudflareKiller() }
 
     override var name = "DramaBox"
@@ -120,11 +121,24 @@ class Dramabox : MainAPI() {
     private suspend inline fun <reified T> requestJson(url: String): T? {
         repeat(2) { attempt ->
             runCatching {
+                // API domain is usually reachable directly; avoid long Cloudflare wait on first attempt.
+                val plain = app.get(
+                    url,
+                    headers = interceptHeaders,
+                    referer = "$mainUrl/",
+                    timeout = 20L
+                )
+                val plainBody = plain.text
+                if (!looksLikeChallenge(plainBody)) {
+                    return parseJson<T>(plainBody)
+                }
+
                 val body = app.get(
                     url,
                     headers = interceptHeaders,
                     interceptor = cloudflareInterceptor,
-                    referer = "$mainUrl/"
+                    referer = "$mainUrl/",
+                    timeout = 25L
                 ).text
                 if (looksLikeChallenge(body)) return null
                 return parseJson<T>(body)
