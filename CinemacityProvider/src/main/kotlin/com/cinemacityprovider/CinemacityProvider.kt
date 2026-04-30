@@ -33,6 +33,7 @@ import com.lagradost.cloudstream3.newTvSeriesLoadResponse
 import com.lagradost.cloudstream3.toNewSearchResponseList
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -428,6 +429,23 @@ class CinemacityProvider : MainAPI() {
         val subtitles = parseSubtitlePaths(rawSubtitle)
         subtitles.forEach { (_, url) -> subtitleCallback(newSubtitleFile(url.second, url.first)) }
 
+        val hlsPaths = rels.filter {
+            it.endsWith(".m3u8", true) || it.contains(".urlset/master.m3u8", true)
+        }.distinct()
+
+        var emitted = false
+        for (hlsPath in hlsPaths) {
+            val streamUrl = resolveMediaUrl(base, hlsPath)
+            callback(
+                newExtractorLink(name, "$name HLS", streamUrl, ExtractorLinkType.M3U8) {
+                    referer = fallbackBaseUrl
+                    headers = requestHeaders + mapOf("Referer" to fallbackBaseUrl)
+                    quality = extractQuality(hlsPath)
+                }
+            )
+            emitted = true
+        }
+
         val audios = rels.filter {
             it.endsWith(".m4a", true) && !it.endsWith(".urlset/master.m3u8", true)
         }.mapNotNull { path ->
@@ -444,13 +462,31 @@ class CinemacityProvider : MainAPI() {
             res to path
         }.distinctBy { it.second }
 
-        var emitted = false
+        if (emitted) return true
+
+        for ((_, langLabel, audioPath) in audios) {
+            for ((res, videoPath) in videos) {
+                val directVideoUrl = resolveMediaUrl(base, videoPath)
+                callback(
+                    newExtractorLink(name, "$name $res $langLabel", directVideoUrl, ExtractorLinkType.VIDEO) {
+                        referer = fallbackBaseUrl
+                        headers = requestHeaders + mapOf("Referer" to fallbackBaseUrl)
+                        quality = extractQuality(videoPath)
+                    }
+                )
+                emitted = true
+            }
+        }
+
+        if (emitted) return true
+
         for ((_, langLabel, audioPath) in audios) {
             for ((res, videoPath) in videos) {
                 val href = buildDownloadHref(base, videoPath, audioPath, subtitles.map { it.first })
                 callback(
-                    newExtractorLink(name, "$name $res $langLabel", href, INFER_TYPE) {
-                        referer = mainUrl
+                    newExtractorLink(name, "$name Download $res $langLabel", href, INFER_TYPE) {
+                        referer = fallbackBaseUrl
+                        headers = requestHeaders + mapOf("Referer" to fallbackBaseUrl)
                         quality = extractQuality(videoPath)
                     }
                 )
@@ -458,6 +494,28 @@ class CinemacityProvider : MainAPI() {
             }
         }
         return emitted
+    }
+
+    private fun resolveMediaUrl(base: String, path: String): String {
+        val cleanPath = path.trim()
+        if (cleanPath.startsWith("http://", true) || cleanPath.startsWith("https://", true)) {
+            return cleanPath
+        }
+        if (cleanPath.startsWith("/")) {
+            return fixUrl(cleanPath)
+        }
+
+        val cleanBase = base.trim().substringBefore("?")
+        if (cleanBase.startsWith("http://", true) || cleanBase.startsWith("https://", true)) {
+            val normalizedBase = when {
+                cleanBase.endsWith("/") -> cleanBase
+                cleanBase.substringAfterLast("/").contains(".") -> cleanBase.substringBeforeLast("/") + "/"
+                else -> "$cleanBase/"
+            }
+            return normalizedBase + cleanPath.removePrefix("/")
+        }
+
+        return fixUrl("/$cleanPath")
     }
 
     private fun buildDownloadHref(
