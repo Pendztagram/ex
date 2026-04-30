@@ -14,7 +14,7 @@ import java.util.Base64
 
 class AnimexinProvider : MainAPI() {
     override var mainUrl = "https://animexin.dev"
-    override var name = "Animexin"
+    override var name = "Animexin🤪"
     override var lang = "id"
     override val hasMainPage = true
     override val hasDownloadSupport = true
@@ -230,15 +230,21 @@ class AnimexinProvider : MainAPI() {
 
     private fun Element.toEpisode(): Episode? {
         val href = attr("href").trim().takeIf { it.isNotBlank() }?.let(::fixUrl) ?: return null
-        val epText = text().trim()
-        val epNum = Regex("""Episode\s*(\d+(?:\.\d+)?)""", RegexOption.IGNORE_CASE)
-            .find(epText)
+        val rawTitle = selectFirst(".epl-title")?.text()?.trim().orEmpty()
+            .ifBlank { text().trim() }
+        val cleanTitle = rawTitle
+            .replace(Regex("""^\d+\s*[\.\-]?\s*"""), "")
+            .trim()
+
+        val epNum = selectFirst(".epl-num")?.text()?.trim()?.toDoubleOrNull()
+            ?: Regex("""Episode\s*(\d+(?:\.\d+)?)""", RegexOption.IGNORE_CASE)
+            .find(cleanTitle)
             ?.groupValues
             ?.getOrNull(1)
             ?.toDoubleOrNull()
 
         return newEpisode(href) {
-            name = epText.ifBlank { "Episode ${epNum ?: "?"}" }
+            name = cleanTitle.ifBlank { "Episode ${epNum ?: "?"}" }
             episode = epNum?.toInt()
         }
     }
