@@ -101,10 +101,15 @@ class CinemacityProvider : MainAPI() {
 
     private fun isCloudflareChallenge(html: String): Boolean {
         val body = html.lowercase()
-        return body.contains("just a moment") ||
-            body.contains("/cdn-cgi/challenge-platform/") ||
-            body.contains("__cf_chl_tk") ||
-            body.contains("cf-browser-verification")
+        val hasBlockingCopy = body.contains("just a moment") ||
+            body.contains("enable javascript and cookies to continue") ||
+            body.contains("cf-browser-verification") ||
+            body.contains("__cf_chl_tk")
+        val hasExpectedContent = body.contains("dar-short_item") ||
+            body.contains("dar-full") ||
+            body.contains("playerjs-") ||
+            body.contains("cinemacity")
+        return hasBlockingCopy && !hasExpectedContent
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
