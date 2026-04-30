@@ -10,6 +10,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
+import java.util.Base64
 
 class AnimexinProvider : MainAPI() {
     override var mainUrl = "https://animexin.dev"
@@ -72,19 +73,25 @@ class AnimexinProvider : MainAPI() {
             .filter { it.isNotBlank() }
             .distinct()
 
+        val statusText = detailValue(document, "Status")
         val status = when {
-            detailValue(document, "Status")?.contains("ongoing", true) == true -> ShowStatus.Ongoing
-            detailValue(document, "Status").isNullOrBlank() -> null
+            statusText?.contains("ongoing", true) == true -> ShowStatus.Ongoing
+            statusText.isNullOrBlank() -> null
             else -> ShowStatus.Completed
         }
 
         val year = detailValue(document, "Released")?.let(::extractYear)
-        val type = getType(detailValue(document, "Type"), fixedUrl)
 
         val episodes = document.select(".eplister li a[href], .epl li a[href]")
             .mapNotNull { it.toEpisode() }
             .distinctBy { it.data }
             .sortedByDescending { it.episode ?: -1 }
+
+        val type = when {
+            episodes.size > 1 -> TvType.Anime
+            fixedUrl.contains("-episode-", true) -> TvType.Anime
+            else -> getType(detailValue(document, "Type"), fixedUrl)
+        }
 
         val recommendations = document.select(".listupd .bsx a[href]")
             .mapNotNull { it.toSearchResult() }
@@ -165,6 +172,29 @@ class AnimexinProvider : MainAPI() {
             }
         }
 
+        document.select("select.mirror option[value]").forEach { option ->
+            val rawValue = option.attr("value").trim()
+            if (rawValue.isBlank()) return@forEach
+
+            val decoded = decodeBase64(rawValue) ?: rawValue
+            val mirrors = Regex("""(?:src|embedUrl)\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+                .findAll(decoded)
+                .mapNotNull { it.groupValues.getOrNull(1) }
+                .map(::fixUrl)
+                .distinct()
+                .toList()
+
+            mirrors.forEach { mirrorUrl ->
+                if (mirrorUrl.contains(".m3u8", true) || mirrorUrl.contains(".mp4", true)) {
+                    emitDirect(mirrorUrl, data, "$name Mirror")
+                } else {
+                    runCatching {
+                        loadExtractor(mirrorUrl, data, subtitleCallback, callback)
+                    }
+                }
+            }
+        }
+
         document.select(".dlbox a[href], .download a[href], a[href*='mediafire.com'], a[href*='mirrored.to']")
             .mapNotNull { it.attr("href").takeIf(String::isNotBlank) }
             .distinct()
@@ -223,8 +253,18 @@ class AnimexinProvider : MainAPI() {
     }
 
     private fun detailValue(document: Document, label: String): String? {
-        val regex = Regex("""$label\s*:\s*([^\n<]+)""", RegexOption.IGNORE_CASE)
-        return regex.find(document.text())?.groupValues?.getOrNull(1)?.trim()?.ifBlank { null }
+        val info = document.select(".infox .spe span, .bigcontent .infox .spe span")
+        val fromInfo = info.firstOrNull { span ->
+            span.selectFirst("b")?.text()?.replace(":", "")?.trim()?.equals(label, true) == true
+        }?.ownText()?.trim()?.ifBlank { null }
+        if (fromInfo != null) return fromInfo
+
+        val regex = Regex("""\b$label\s*:\s*([^\n<]+)""", RegexOption.IGNORE_CASE)
+        return regex.find(document.selectFirst(".infox, .bigcontent .infox")?.text().orEmpty())
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.trim()
+            ?.ifBlank { null }
     }
 
     private fun extractYear(text: String): Int? {
@@ -260,5 +300,11 @@ class AnimexinProvider : MainAPI() {
             url.startsWith("http://", true) || url.startsWith("https://", true) -> url
             else -> "$mainUrl/${url.trimStart('/')}"
         }
+    }
+
+    private fun decodeBase64(value: String): String? {
+        return runCatching {
+            String(Base64.getDecoder().decode(value))
+        }.getOrNull()
     }
 }
