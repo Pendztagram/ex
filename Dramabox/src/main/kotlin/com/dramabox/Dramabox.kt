@@ -2,6 +2,7 @@ package com.dramabox
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -12,6 +13,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 class Dramabox : MainAPI() {
     override var mainUrl = "https://drama.sansekai.my.id"
     private val apiUrl = "https://api.sansekai.my.id/api"
+    private val cloudflareInterceptor by lazy { CloudflareKiller() }
 
     override var name = "DramaBox"
     override var lang = "id"
@@ -38,9 +40,11 @@ class Dramabox : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = appendPage(request.data, page)
-        val items = requestList<DramaItem>(url)
-            .mapNotNull { it.toSearch() }
+        val baseUrl = request.data
+        val url = appendPage(baseUrl, page)
+        val items = requestList<DramaItem>(url).ifEmpty {
+            if (url != baseUrl) requestList(baseUrl) else emptyList()
+        }.mapNotNull { it.toSearch() }
         return newHomePageResponse(request.name, items, hasNext = items.isNotEmpty())
     }
 
@@ -116,7 +120,13 @@ class Dramabox : MainAPI() {
     private suspend inline fun <reified T> requestJson(url: String): T? {
         repeat(2) { attempt ->
             runCatching {
-                val body = app.get(url, headers = interceptHeaders).text
+                val body = app.get(
+                    url,
+                    headers = interceptHeaders,
+                    interceptor = cloudflareInterceptor,
+                    referer = "$mainUrl/"
+                ).text
+                if (looksLikeChallenge(body)) return null
                 return parseJson<T>(body)
             }
             if (attempt == 0) kotlinx.coroutines.delay(400)
@@ -129,8 +139,24 @@ class Dramabox : MainAPI() {
     }
 
     private fun appendPage(base: String, page: Int): String {
+        val pagedPaths = listOf("/foryou", "/dubindo")
+        if (pagedPaths.none { base.contains(it) }) return base
         val join = if (base.contains("?")) "&" else "?"
         return "$base${join}page=${if (page <= 0) 1 else page}"
+    }
+
+    private fun looksLikeChallenge(body: String): Boolean {
+        val preview = body.take(32_768)
+        if (preview.isBlank()) return false
+        val hints = listOf(
+            "cf-challenge",
+            "challenge-platform",
+            "Attention Required",
+            "Just a moment",
+            "Verifying you are human",
+            "/cdn-cgi/challenge-platform/"
+        )
+        return hints.any { preview.contains(it, ignoreCase = true) }
     }
 
     private fun DramaItem.toSearch(): SearchResponse? {
