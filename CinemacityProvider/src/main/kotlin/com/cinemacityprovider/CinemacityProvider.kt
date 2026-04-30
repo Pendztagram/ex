@@ -70,23 +70,33 @@ class CinemacityProvider : MainAPI() {
     override val mainPage = mainPageOf(
         "movies" to "Movies",
         "tv-series" to "TV Series",
-        "xfsearch/genre/anime" to "Anime",
-        "xfsearch/genre/asian" to "Asian",
-        "xfsearch/genre/animation" to "Animation",
-        "xfsearch/genre/documentary" to "Documentary",
+        "xfsearch/genre/anime/" to "Anime",
+        "xfsearch/genre/asian/" to "Asian",
+        "xfsearch/genre/animation/" to "Animation",
+        "xfsearch/genre/documentary/" to "Documentary",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val doc = if (page == 1) requestDocument("$mainUrl/${request.data}")
-        else requestDocument("$mainUrl/${request.data}/page/$page")
+        val forceCloudflare = request.data.startsWith("xfsearch/", true)
+        val doc = if (page == 1) requestDocument("$mainUrl/${request.data}", forceCloudflare)
+        else requestDocument("$mainUrl/${request.data}/page/$page", forceCloudflare)
 
         val home = doc.select("div.dar-short_item").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(request.name, home, true)
     }
 
-    private suspend fun requestDocument(url: String) = requestPage(url).document
+    private suspend fun requestDocument(url: String, forceCloudflare: Boolean = false) =
+        requestPage(url, forceCloudflare).document
 
-    private suspend fun requestPage(url: String) =
+    private suspend fun requestPage(url: String, forceCloudflare: Boolean = false) =
+        if (forceCloudflare) {
+            app.get(
+                url,
+                interceptor = cloudflareInterceptor,
+                headers = requestHeaders,
+                referer = mainUrl
+            )
+        } else {
         app.get(
             url,
             headers = requestHeaders,
@@ -98,6 +108,7 @@ class CinemacityProvider : MainAPI() {
                 headers = requestHeaders,
                 referer = mainUrl
             )
+        }
 
     private fun isCloudflareChallenge(html: String): Boolean {
         val body = html.lowercase()
@@ -448,6 +459,8 @@ class CinemacityProvider : MainAPI() {
         var emitted = false
         for (hlsPath in hlsPaths) {
             val streamUrl = resolveMediaUrl(base, hlsPath)
+            if (!streamUrl.contains(".m3u8", true)) continue
+            if (streamUrl.contains("/movies/", true) || streamUrl.contains("/tv-series/", true)) continue
             callback(
                 newExtractorLink(name, "$name HLS", streamUrl, ExtractorLinkType.M3U8) {
                     referer = fallbackBaseUrl
@@ -473,8 +486,6 @@ class CinemacityProvider : MainAPI() {
                 .find(path)?.groupValues?.getOrNull(1)?.lowercase() ?: "mp4"
             res to path
         }.distinctBy { it.second }
-
-        if (emitted) return true
 
         for ((_, langLabel, audioPath) in audios) {
             for ((res, videoPath) in videos) {
