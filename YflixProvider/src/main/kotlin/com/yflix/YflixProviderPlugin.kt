@@ -8,5 +8,9 @@ import com.lagradost.cloudstream3.plugins.Plugin
 class YflixProviderPlugin : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(YflixProvider())
+        registerExtractorAPI(MegaUp())
+        registerExtractorAPI(Fourspromax())
+        registerExtractorAPI(Rapidairmax())
+        registerExtractorAPI(Rapidshare())
     }
 }
