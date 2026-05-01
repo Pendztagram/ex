@@ -1,101 +1,125 @@
 package com.yflix
 
+import android.annotation.SuppressLint
+import android.os.Handler
+import android.os.Looper
+import android.webkit.CookieManager
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.AcraApplication
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.INFER_TYPE
-import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.newExtractorLink
-import org.json.JSONObject
+import org.json.JSONArray
 import java.net.URLEncoder
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class YflixProvider : MainAPI() {
-    override var mainUrl = "https://www.themoviedb.org"
-    private val yflixApi = "https://yflix.to"
-    private val tmdbApi = "https://api.themoviedb.org/3"
-    private val tmdbApiKey = "b030404650f279792a8d3287232358e3"
-
+    override var mainUrl = "https://yflix.to"
     override var name = "Yflix"
     override var lang = "en"
     override val hasMainPage = true
     override val hasQuickSearch = true
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
+    private val tmdbApi = "https://api.themoviedb.org/3"
+    private val tmdbApiKey = "b030404650f279792a8d3287232358e3"
+
     override val mainPage = mainPageOf(
-        "$tmdbApi/trending/movie/day?api_key=$tmdbApiKey" to "Trending Movies",
-        "$tmdbApi/movie/popular?api_key=$tmdbApiKey" to "Popular Movies",
-        "$tmdbApi/movie/now_playing?api_key=$tmdbApiKey" to "Now Playing Movies",
-        "$tmdbApi/trending/tv/day?api_key=$tmdbApiKey" to "Trending TV",
-        "$tmdbApi/tv/popular?api_key=$tmdbApiKey" to "Popular TV",
+        "$mainUrl/browser?type[]=movie&sort=trending" to "Trending Movies",
+        "$mainUrl/browser?type[]=tv&sort=trending" to "Trending TV Shows",
+        "$mainUrl/browser?type[]=movie&type[]=tv&sort=imdb" to "Top IMDb",
+        "$mainUrl/browser?type[]=movie&type[]=tv&sort=release_date" to "Latest Release",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = buildPagedUrl(request.data, page)
-        val response = app.get(url).parsedSafe<TmdbResults>() ?: throw ErrorLoadingException("Invalid response")
-        val items = response.results.orEmpty().mapNotNull { it.toSearchResponse() }
-        val hasNext = (response.page ?: 1) < (response.totalPages ?: 1)
+        val doc = app.get(buildPagedUrl(request.data, page), referer = "$mainUrl/").document
+        val items = doc.select("div.film-section div.item").mapNotNull { it.toSearchResponse() }
+        val hasNext = doc.select("ul.pagination a[rel=next]").isNotEmpty()
         return newHomePageResponse(HomePageList(request.name, items), hasNext = hasNext)
     }
 
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$tmdbApi/search/multi?api_key=$tmdbApiKey&query=${query.urlEncoded()}&page=1"
-        return app.get(url).parsedSafe<TmdbResults>()?.results.orEmpty().mapNotNull { it.toSearchResponse() }
+        val doc = app.get("$mainUrl/browser?keyword=${query.urlEncoded()}", referer = "$mainUrl/").document
+        return doc.select("div.film-section div.item").mapNotNull { it.toSearchResponse() }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val media = parseSiteMediaUrl(url)
-        val detailUrl = when (media.type) {
-            "movie" -> "$tmdbApi/movie/${media.id}?api_key=$tmdbApiKey&append_to_response=external_ids,recommendations,videos"
-            else -> "$tmdbApi/tv/${media.id}?api_key=$tmdbApiKey&append_to_response=external_ids,recommendations,videos"
-        }
+        val doc = app.get(url, referer = "$mainUrl/").document
+        val title = doc.selectFirst("h1.title")?.text()?.trim().orEmpty()
+        if (title.isBlank()) throw ErrorLoadingException("Missing title")
 
-        val detail = app.get(detailUrl).parsedSafe<TmdbDetail>() ?: throw ErrorLoadingException("Invalid detail")
-        val title = detail.title ?: detail.name ?: throw ErrorLoadingException("Missing title")
+        val isTv = doc.select("#filmCtrl .prev-next").isNotEmpty()
+        val poster = doc.selectFirst("div.poster img")?.attr("abs:src")
+            ?.ifBlank { doc.selectFirst("div.poster img")?.attr("src") }
+        val background = doc.selectFirst("div.detail-bg, div.player-bg")
+            ?.attr("style")
+            ?.substringAfter("url('")
+            ?.substringBefore("')")
+            ?.takeIf { it.isNotBlank() }
+        val plot = doc.selectFirst("div.description")?.text()?.trim()
+        val year = doc.select("div.metadata.set span").map { it.text().trim() }
+            .firstOrNull { it.matches(Regex("""\d{4}""")) }
+            ?.toIntOrNull()
+        val rating = doc.selectFirst("div.metadata.set span.IMDb")?.ownText()?.trim()?.toDoubleOrNull()
+        val contentRating = doc.selectFirst("div.metadata.set span.ratingR")?.text()?.trim()
+        val tags = doc.select("ul.mics li:contains(Genres:) a").map { it.text().trim() }
+        val recommendations = doc.select(".movie-related .item").mapNotNull { it.toSearchResponse() }
 
-        val trailer = detail.videos?.results.orEmpty().firstOrNull {
-            it.site.equals("YouTube", true) && !it.key.isNullOrBlank()
-        }?.key?.let { "https://www.youtube.com/watch?v=$it" }
+        val tmdbMeta = fetchTmdbMeta(title, year, isTv)
+        val trailer = tmdbMeta?.videos?.results.orEmpty()
+            .firstOrNull { it.site.equals("YouTube", true) && !it.key.isNullOrBlank() }
+            ?.key
+            ?.let { "https://www.youtube.com/watch?v=$it" }
 
-        return if (media.type == "movie") {
-            newMovieLoadResponse(
-                title,
-                "$mainUrl/movie/${media.id}",
-                TvType.Movie,
-                LinkData(
-                    tmdbId = media.id,
-                    imdbId = detail.externalIds?.imdbId,
-                    type = "movie",
-                    title = title,
-                    year = detail.releaseDate?.substringBefore("-")?.toIntOrNull()
-                ).toJson()
+        return if (isTv) {
+            val episodes = tmdbMeta?.id?.let { buildEpisodes(it, tmdbMeta.externalIds?.imdbId, title, year, url) }.orEmpty()
+            newTvSeriesLoadResponse(
+                name = title,
+                url = url,
+                type = TvType.TvSeries,
+                episodes = episodes
             ) {
-                this.posterUrl = detail.posterPath.toPosterUrl()
-                this.plot = detail.overview
-                this.year = detail.releaseDate?.substringBefore("-")?.toIntOrNull()
-                detail.voteAverage?.let { this.score = Score.from10(it) }
-                this.tags = detail.genres.orEmpty().mapNotNull { it.name }
-                trailer?.let { addTrailer(it, addRaw = true) }
+                this.posterUrl = poster
+                this.backgroundPosterUrl = background ?: poster
+                this.plot = plot
+                this.year = year
+                this.tags = tags
+                this.recommendations = recommendations
+                this.contentRating = contentRating
+                rating?.let { this.score = Score.from10(it) }
+                trailer?.let { addTrailer(it, addRaw = false) }
             }
         } else {
-            val episodes = buildEpisodes(media.id, detail.externalIds?.imdbId)
-            newTvSeriesLoadResponse(
-                title,
-                "$mainUrl/tv/${media.id}",
-                TvType.TvSeries,
-                episodes
+            newMovieLoadResponse(
+                name = title,
+                url = url,
+                type = TvType.Movie,
+                dataUrl = LinkData(
+                    watchUrl = url,
+                    tmdbId = tmdbMeta?.id,
+                    imdbId = tmdbMeta?.externalIds?.imdbId,
+                    title = title,
+                    year = year,
+                    isTv = false
+                ).toJson()
             ) {
-                this.posterUrl = detail.posterPath.toPosterUrl()
-                this.plot = detail.overview
-                this.year = detail.firstAirDate?.substringBefore("-")?.toIntOrNull()
-                detail.voteAverage?.let { this.score = Score.from10(it) }
-                this.tags = detail.genres.orEmpty().mapNotNull { it.name }
-                trailer?.let { addTrailer(it, addRaw = true) }
+                this.posterUrl = poster
+                this.backgroundPosterUrl = background ?: poster
+                this.plot = plot
+                this.year = year
+                this.tags = tags
+                this.recommendations = recommendations
+                this.contentRating = contentRating
+                rating?.let { this.score = Score.from10(it) }
+                trailer?.let { addTrailer(it, addRaw = false) }
             }
         }
     }
@@ -107,289 +131,104 @@ class YflixProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val info = tryParseJson<LinkData>(data) ?: return false
-        val ids = listOfNotNull(info.tmdbId?.toString(), info.imdbId).distinct()
-        if (ids.isEmpty()) return false
+        var found = false
 
-        val patterns = listOf(
-            if (info.season == null) "embed/movie/%s" else "embed/tv/%s/${info.season}/${info.episode}",
-            if (info.season == null) "watch/movie/%s" else "watch/tv/%s/${info.season}/${info.episode}",
-            if (info.season == null) "movie/%s" else "tv/%s/${info.season}/${info.episode}",
-        )
-
-        val emitted = mutableSetOf<String>()
-
-        fun emitLink(link: ExtractorLink) {
-            val key = "${link.name}|${link.url}"
-            if (emitted.add(key)) callback(link)
-        }
-
-        for (id in ids) {
-            for (pattern in patterns) {
-                val url = "$yflixApi/${pattern.format(id)}"
-                val res = runCatching { app.get(url) }.getOrNull() ?: continue
-                val picked = extractPlayableUrl(res.text, res.document) ?: continue
-                if (tryEmitPicked(picked, "$yflixApi/", subtitleCallback, ::emitLink, emitted)) return true
-            }
-        }
-
-        for (watchUrl in resolveWatchCandidates(info)) {
-            val res = runCatching { app.get(watchUrl, referer = "$yflixApi/") }.getOrNull() ?: continue
-            if (resolveViaYflixAjax(watchUrl, res.text, info, subtitleCallback, ::emitLink)) return true
-            val picked = extractPlayableUrl(res.text, res.document) ?: continue
-            if (tryEmitPicked(picked, watchUrl, subtitleCallback, ::emitLink, emitted)) return true
-        }
-
-        val fallbackEmbeds = buildList {
-            info.tmdbId?.let { tmdb ->
-                if (info.season == null) {
-                    add("https://vidsrc.to/embed/movie/$tmdb")
-                    add("https://vidsrc.xyz/embed/movie/$tmdb")
-                    add("https://vidsrc.net/embed/movie/$tmdb")
-                    add("https://vidsrc.su/embed/movie/$tmdb")
-                    add("https://vidsrc.cc/v2/embed/movie/$tmdb")
-                    add("https://www.2embed.cc/embed/$tmdb")
-                    add("https://www.2embed.skin/embed/$tmdb")
-                } else {
-                    add("https://vidsrc.to/embed/tv/$tmdb/${info.season}/${info.episode}")
-                    add("https://vidsrc.xyz/embed/tv/$tmdb/${info.season}/${info.episode}")
-                    add("https://vidsrc.net/embed/tv/$tmdb/${info.season}/${info.episode}")
-                    add("https://vidsrc.su/embed/tv/$tmdb/${info.season}/${info.episode}")
-                    add("https://vidsrc.cc/v2/embed/tv/$tmdb/${info.season}/${info.episode}")
-                    add("https://www.2embed.cc/embedtv/$tmdb&s=${info.season}&e=${info.episode}")
-                    add("https://www.2embed.skin/embedtv/$tmdb&s=${info.season}&e=${info.episode}")
-                }
-            }
-            info.imdbId?.let { imdb ->
-                if (info.season == null) {
-                    add("https://vidsrc.xyz/embed/movie?imdb=$imdb")
-                    add("https://vidsrc.net/embed/movie?imdb=$imdb")
-                    add("https://vidsrc.su/embed/movie?imdb=$imdb")
-                } else {
-                    add("https://vidsrc.xyz/embed/tv?imdb=$imdb&season=${info.season}&episode=${info.episode}")
-                    add("https://vidsrc.net/embed/tv?imdb=$imdb&season=${info.season}&episode=${info.episode}")
-                    add("https://vidsrc.su/embed/tv?imdb=$imdb&season=${info.season}&episode=${info.episode}")
-                }
-            }
-        }.distinct()
-
-        for (embed in fallbackEmbeds) {
+        resolveNativeEmbeds(info).forEach { native ->
             runCatching {
-                loadExtractor(embed, baseReferer(embed), subtitleCallback, ::emitLink)
-            }
-            if (emitted.isNotEmpty()) return true
-        }
-
-        return emitted.isNotEmpty()
-    }
-
-    private suspend fun tryEmitPicked(
-        picked: String,
-        referer: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit,
-        emitted: Set<String>
-    ): Boolean {
-        when {
-            picked.contains(".m3u8", true) -> {
-                M3u8Helper.generateM3u8("Yflix", picked, "$yflixApi/").forEach(callback)
-                return emitted.isNotEmpty()
-            }
-
-            picked.contains(".mp4", true) -> {
-                callback(
-                    newExtractorLink("Yflix", "Yflix", picked, INFER_TYPE) {
-                        this.referer = referer
-                    }
-                )
-                return emitted.isNotEmpty()
-            }
-
-            else -> {
-                runCatching {
-                    loadExtractor(picked, referer, subtitleCallback, callback)
-                }
-                return emitted.isNotEmpty()
+                loadExtractor(native.url, info.watchUrl ?: baseReferer(native.url), subtitleCallback, callback)
+            }.onSuccess {
+                found = true
             }
         }
-    }
 
-    private suspend fun resolveWatchCandidates(info: LinkData): List<String> {
-        val title = info.title?.takeIf { it.isNotBlank() } ?: return emptyList()
-        val doc = runCatching {
-            app.get("$yflixApi/filter?keyword=${title.urlEncoded()}").document
-        }.getOrNull() ?: return emptyList()
+        if (found) return true
 
-        val target = normalizeTitle(title)
-        return doc.select("a[href*=/watch/]")
-            .mapNotNull { a ->
-                val href = a.attr("abs:href").ifBlank { a.attr("href") }
-                if (href.isBlank()) return@mapNotNull null
-                val cardTitle = a.attr("title")
-                    .ifBlank { a.selectFirst(".title")?.text().orEmpty() }
-                    .ifBlank { a.text() }
-                Triple(href, normalizeTitle(cardTitle), cardTitle)
-            }
-            .filter { (href, _, _) -> href.contains("/watch/") }
-            .sortedBy { (_, norm, _) ->
-                when {
-                    norm == target -> 0
-                    norm.contains(target) || target.contains(norm) -> 1
-                    else -> 2 + kotlin.math.abs(norm.length - target.length)
-                }
-            }
-            .map { it.first }
-            .distinct()
-            .take(8)
-    }
+        val embeds = buildFallbackEmbeds(info)
 
-    private fun extractPlayableUrl(html: String, doc: org.jsoup.nodes.Document): String? {
-        val scripts = doc.select("script").joinToString("\n") { it.data() } + "\n" + html
-        return listOfNotNull(
-            doc.selectFirst("iframe[src]")?.attr("abs:src"),
-            doc.selectFirst("iframe[data-src]")?.attr("abs:data-src"),
-            doc.selectFirst("video source[src], source[src]")?.attr("abs:src"),
-            doc.selectFirst("video[src]")?.attr("abs:src"),
-            Regex("""https?://[^"'\\s]+\\.(?:m3u8|mp4)[^"'\\s]*""", RegexOption.IGNORE_CASE).find(scripts)?.value,
-            Regex("""https?://[^"'\\s]+/(?:embed|watch)/[^"'\\s]+""", RegexOption.IGNORE_CASE).find(scripts)?.value,
-        ).map { it.trim() }
-            .map { if (it.startsWith("//")) "https:$it" else it }
-            .firstOrNull { it.startsWith("http", true) }
-    }
-
-    private suspend fun resolveViaYflixAjax(
-        watchUrl: String,
-        watchHtml: String,
-        info: LinkData,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        val keyword = watchUrl.substringAfter("/watch/").substringBefore(".").substringBefore("?").trim()
-        if (keyword.isBlank()) return false
-        val dataId = Regex("""id=["']movie-rating["'][^>]*data-id=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
-            .find(watchHtml)?.groupValues?.getOrNull(1)
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?: return false
-
-        val listUrls = listOf(
-            "$yflixApi/ajax/episodes/list?keyword=$keyword&id=$dataId&_= $dataId".replace(" ", ""),
-            "$yflixApi/ajax/episodes/list?keyword=$keyword&id=$dataId",
-            "$yflixApi/ajax/episodes/list?keyword=$keyword&id=$dataId&_=${System.currentTimeMillis()}"
-        )
-
-        var episodesHtml: String? = null
-        for (u in listUrls) {
-            val text = runCatching { app.get(u, referer = watchUrl).text }.getOrNull() ?: continue
-            val result = runCatching { JSONObject(text).optString("result") }.getOrNull()
-            if (!result.isNullOrBlank()) {
-                episodesHtml = result
-                break
+        for (embed in embeds) {
+            runCatching {
+                loadExtractor(embed, baseReferer(embed), subtitleCallback, callback)
+            }.onSuccess {
+                found = true
             }
         }
-        if (episodesHtml.isNullOrBlank()) return false
 
-        val epDoc = org.jsoup.Jsoup.parse(episodesHtml)
-        val candidateEpisode = selectEpisodeNode(epDoc, info) ?: return false
-        val eid = candidateEpisode.attr("eid").trim()
-        if (eid.isBlank()) return false
+        return found
+    }
 
-        val linksListUrls = listOf(
-            "$yflixApi/ajax/links/list?eid=$eid&_=$eid",
-            "$yflixApi/ajax/links/list?eid=$eid",
-            "$yflixApi/ajax/links/list?eid=$eid&_=${System.currentTimeMillis()}"
-        )
+    private fun org.jsoup.nodes.Element.toSearchResponse(): SearchResponse? {
+        val href = selectFirst("a.poster, a.title")?.attr("abs:href").orEmpty()
+        val title = selectFirst("a.title")?.text()?.trim().orEmpty()
+        if (href.isBlank() || title.isBlank()) return null
 
-        var serversHtml: String? = null
-        for (u in linksListUrls) {
-            val text = runCatching { app.get(u, referer = watchUrl).text }.getOrNull() ?: continue
-            val result = runCatching { JSONObject(text).optString("result") }.getOrNull()
-            if (!result.isNullOrBlank()) {
-                serversHtml = result
-                break
+        val poster = selectFirst("a.poster img")?.attr("abs:data-src")
+            ?.ifBlank { selectFirst("a.poster img")?.attr("abs:src") }
+            ?.ifBlank { selectFirst("a.poster img")?.attr("data-src") }
+            ?.ifBlank { selectFirst("a.poster img")?.attr("src") }
+        val quality = selectFirst("div.quality")?.text()?.trim()
+        val meta = select("div.metadata span").map { it.text().trim() }
+        val isTv = meta.firstOrNull().equals("TV", true)
+        val year = meta.firstOrNull { it.matches(Regex("""\d{4}""")) }?.toIntOrNull()
+
+        return if (isTv) {
+            newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
+                this.posterUrl = poster
+                this.year = year
+                this.quality = getQualityFromString(quality)
+            }
+        } else {
+            newMovieSearchResponse(title, href, TvType.Movie) {
+                this.posterUrl = poster
+                this.year = year
+                this.quality = getQualityFromString(quality)
             }
         }
-        if (serversHtml.isNullOrBlank()) return false
-
-        val serversDoc = org.jsoup.Jsoup.parse(serversHtml)
-        val servers = serversDoc.select("li.server[data-lid], div.server[data-lid]")
-        if (servers.isEmpty()) return false
-
-        var emitted = false
-        for (server in servers) {
-            val lid = server.attr("data-lid").trim()
-            if (lid.isBlank()) continue
-            val viewUrls = listOf(
-                "$yflixApi/ajax/links/view?id=$lid&_=$lid",
-                "$yflixApi/ajax/links/view?id=$lid",
-                "$yflixApi/ajax/links/view?id=$lid&_=${System.currentTimeMillis()}"
-            )
-
-            var resultPayload: String? = null
-            for (u in viewUrls) {
-                val text = runCatching { app.get(u, referer = watchUrl).text }.getOrNull() ?: continue
-                val result = runCatching { JSONObject(text).optString("result") }.getOrNull()
-                if (!result.isNullOrBlank()) {
-                    resultPayload = result
-                    break
-                }
-            }
-            if (resultPayload.isNullOrBlank()) continue
-
-            val resolvedUrl = extractUrlFromAnyPayload(resultPayload) ?: continue
-            runCatching { loadExtractor(resolvedUrl, watchUrl, subtitleCallback, callback) }
-            emitted = true
-        }
-        return emitted
     }
 
-    private fun selectEpisodeNode(doc: org.jsoup.nodes.Document, info: LinkData): org.jsoup.nodes.Element? {
-        if (info.season == null || info.episode == null) {
-            return doc.selectFirst("ul.episodes a[eid]")
-        }
-        val exact = doc.select("ul.episodes[data-season=${info.season}] a[eid][num=${info.episode}]").firstOrNull()
-        if (exact != null) return exact
-        val bySeason = doc.select("ul.episodes[data-season=${info.season}] a[eid]").getOrNull((info.episode - 1).coerceAtLeast(0))
-        if (bySeason != null) return bySeason
-        return doc.selectFirst("a[eid]")
+    private suspend fun fetchTmdbMeta(title: String, year: Int?, isTv: Boolean): TmdbDetail? {
+        val typePath = if (isTv) "tv" else "movie"
+        val searchKey = if (isTv) "first_air_date_year" else "year"
+        val yearPart = year?.let { "&$searchKey=$it" }.orEmpty()
+        val searchUrl = "$tmdbApi/search/$typePath?api_key=$tmdbApiKey&query=${title.urlEncoded()}$yearPart"
+
+        val picked = app.get(searchUrl).parsedSafe<TmdbSearchResults>()?.results.orEmpty()
+            .firstOrNull()
+            ?: return null
+
+        return app.get(
+            "$tmdbApi/$typePath/${picked.id}?api_key=$tmdbApiKey&append_to_response=external_ids,videos"
+        ).parsedSafe()
     }
 
-    private fun extractUrlFromAnyPayload(payload: String): String? {
-        val trimmed = payload.trim()
-        runCatching {
-            val obj = JSONObject(trimmed)
-            obj.optString("url").takeIf { it.isNotBlank() }?.let { return it }
-        }
-        Regex("""https?://[^"'\\s]+""", RegexOption.IGNORE_CASE).find(trimmed)?.value?.let { return it }
-        return null
-    }
-
-    private fun baseReferer(url: String): String {
-        return runCatching {
-            val uri = java.net.URI(url)
-            "${uri.scheme}://${uri.host}/"
-        }.getOrDefault("$yflixApi/")
-    }
-
-    private suspend fun buildEpisodes(tmdbId: Int, imdbId: String?): List<Episode> {
+    private suspend fun buildEpisodes(
+        tmdbId: Int,
+        imdbId: String?,
+        title: String,
+        year: Int?,
+        watchUrl: String
+    ): List<Episode> {
         val detail = app.get("$tmdbApi/tv/$tmdbId?api_key=$tmdbApiKey").parsedSafe<TmdbDetail>() ?: return emptyList()
-        val allEpisodes = mutableListOf<Episode>()
+        val episodes = mutableListOf<Episode>()
 
         detail.seasons.orEmpty().forEach { season ->
             val seasonNumber = season.seasonNumber ?: return@forEach
+            if (seasonNumber <= 0) return@forEach
+
             val seasonData = app.get("$tmdbApi/tv/$tmdbId/season/$seasonNumber?api_key=$tmdbApiKey")
                 .parsedSafe<TmdbSeasonDetail>() ?: return@forEach
 
             seasonData.episodes.orEmpty().forEach { episode ->
                 val episodeNumber = episode.episodeNumber ?: return@forEach
-                allEpisodes += newEpisode(
+                episodes += newEpisode(
                     LinkData(
                         tmdbId = tmdbId,
                         imdbId = imdbId,
-                        type = "tv",
+                        watchUrl = watchUrl,
+                        title = title,
+                        year = year,
+                        isTv = true,
                         season = seasonNumber,
-                        episode = episodeNumber,
-                        title = detail.name,
-                        year = detail.firstAirDate?.substringBefore("-")?.toIntOrNull()
+                        episode = episodeNumber
                     ).toJson()
                 ) {
                     this.name = episode.name ?: "Episode $episodeNumber"
@@ -401,120 +240,278 @@ class YflixProvider : MainAPI() {
             }
         }
 
-        return allEpisodes
+        return episodes
+    }
+
+    private fun buildFallbackEmbeds(info: LinkData): List<String> {
+        return buildList {
+            info.tmdbId?.let { tmdb ->
+                if (info.isTv) {
+                    val season = info.season ?: return@let
+                    val episode = info.episode ?: return@let
+                    add("https://vidsrc.to/embed/tv/$tmdb/$season/$episode")
+                    add("https://vidsrc.xyz/embed/tv/$tmdb/$season/$episode")
+                    add("https://vidsrc.net/embed/tv/$tmdb/$season/$episode")
+                    add("https://vidsrc.su/embed/tv/$tmdb/$season/$episode")
+                    add("https://vidsrc.cc/v2/embed/tv/$tmdb/$season/$episode")
+                    add("https://www.2embed.cc/embedtv/$tmdb&s=$season&e=$episode")
+                    add("https://www.2embed.skin/embedtv/$tmdb&s=$season&e=$episode")
+                } else {
+                    add("https://vidsrc.to/embed/movie/$tmdb")
+                    add("https://vidsrc.xyz/embed/movie/$tmdb")
+                    add("https://vidsrc.net/embed/movie/$tmdb")
+                    add("https://vidsrc.su/embed/movie/$tmdb")
+                    add("https://vidsrc.cc/v2/embed/movie/$tmdb")
+                    add("https://www.2embed.cc/embed/$tmdb")
+                    add("https://www.2embed.skin/embed/$tmdb")
+                }
+            }
+
+            info.imdbId?.let { imdb ->
+                if (info.isTv) {
+                    val season = info.season ?: return@let
+                    val episode = info.episode ?: return@let
+                    add("https://vidsrc.xyz/embed/tv?imdb=$imdb&season=$season&episode=$episode")
+                    add("https://vidsrc.net/embed/tv?imdb=$imdb&season=$season&episode=$episode")
+                    add("https://vidsrc.su/embed/tv?imdb=$imdb&season=$season&episode=$episode")
+                } else {
+                    add("https://vidsrc.xyz/embed/movie?imdb=$imdb")
+                    add("https://vidsrc.net/embed/movie?imdb=$imdb")
+                    add("https://vidsrc.su/embed/movie?imdb=$imdb")
+                }
+            }
+        }.distinct()
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private suspend fun resolveNativeEmbeds(info: LinkData): List<NativeEmbed> {
+        val watchUrl = info.watchUrl ?: return emptyList()
+        val context = AcraApplication.context ?: return emptyList()
+        val latch = CountDownLatch(1)
+        val handler = Handler(Looper.getMainLooper())
+        var webView: WebView? = null
+        var resultJson: String? = null
+
+        val script = buildNativeResolveScript(info)
+
+        handler.post {
+            try {
+                val wv = WebView(context).also { webView = it }
+                CookieManager.getInstance().setAcceptCookie(true)
+                CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true)
+                wv.settings.apply {
+                    javaScriptEnabled = true
+                    domStorageEnabled = true
+                    javaScriptCanOpenWindowsAutomatically = true
+                    loadsImagesAutomatically = true
+                }
+                wv.webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView, url: String) {
+                        fun probe(attempt: Int = 0) {
+                            val readinessScript = """
+                                (function() {
+                                  return !!(window.jQuery && window.x && typeof window.x.G === "function" && document.querySelector("#movie-rating"));
+                                })();
+                            """.trimIndent()
+                            view.evaluateJavascript(readinessScript) { ready ->
+                                if (ready == "true") {
+                                    view.evaluateJavascript(script) { raw ->
+                                        resultJson = raw.decodeJsString()
+                                        latch.countDown()
+                                    }
+                                } else if (attempt >= 20) {
+                                    latch.countDown()
+                                } else {
+                                    handler.postDelayed({ probe(attempt + 1) }, 500L)
+                                }
+                            }
+                        }
+                        probe()
+                    }
+                }
+                wv.loadUrl(watchUrl, mapOf("Referer" to "$mainUrl/"))
+            } catch (_: Exception) {
+                latch.countDown()
+            }
+        }
+
+        latch.await(18, TimeUnit.SECONDS)
+
+        handler.post {
+            runCatching {
+                webView?.stopLoading()
+                webView?.destroy()
+            }
+        }
+
+        val payload = resultJson
+            ?.takeUnless { it.isBlank() || it == "null" }
+            ?: return emptyList()
+
+        return runCatching {
+            JSONArray(payload).let { array ->
+                buildList {
+                    for (index in 0 until array.length()) {
+                        val item = array.optJSONObject(index) ?: continue
+                        val url = item.optString("url").trim()
+                        if (url.isBlank()) continue
+                        add(
+                            NativeEmbed(
+                                name = item.optString("name").ifBlank { "Server ${index + 1}" },
+                                url = url
+                            )
+                        )
+                    }
+                }.distinctBy { it.url }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun buildNativeResolveScript(info: LinkData): String {
+        val isTv = info.isTv
+        val season = info.season ?: 0
+        val episode = info.episode ?: 0
+        val episodeHash = if (isTv) "#ep=$season,$episode" else null
+
+        return """
+            (async function() {
+              const parseHtml = (html) => new DOMParser().parseFromString(html || "", "text/html");
+              const requestJson = (path) => new Promise((resolve, reject) => {
+                window.jQuery.get(path)
+                  .done((data) => resolve(data))
+                  .fail((xhr, status, err) => reject(new Error(err || status || (xhr && xhr.status) || "request_failed")));
+              });
+              try {
+                const root = document.querySelector("#movie-rating");
+                const id = root ? root.getAttribute("data-id") : "";
+                if (!id || !window.x || typeof window.x.G !== "function") return "[]";
+
+                const episodeResponse = await requestJson("/ajax/episodes/list?id=" + encodeURIComponent(id) + "&_=strict" + encodeURIComponent(id));
+                const episodeDoc = parseHtml(episodeResponse && episodeResponse.result);
+                let episodeNode = null;
+                if (${if (isTv) "true" else "false"}) {
+                  const hash = ${episodeHash?.let { "\"$it\"" } ?: "null"};
+                  episodeNode = hash ? episodeDoc.querySelector('a[eid][href$="' + hash + '"]') : null;
+                  if (!episodeNode) {
+                    episodeNode = [...episodeDoc.querySelectorAll("ul.episodes[data-season] a[eid]")].find((node) => {
+                      const seasonNode = node.closest("ul.episodes[data-season]");
+                      const season = Number(seasonNode ? seasonNode.getAttribute("data-season") : 0);
+                      const episode = Number(node.getAttribute("num") || 0);
+                      return season === $season && episode === $episode;
+                    }) || null;
+                  }
+                } else {
+                  episodeNode = episodeDoc.querySelector("a[eid]");
+                }
+                if (!episodeNode) return "[]";
+
+                const eid = episodeNode.getAttribute("eid");
+                if (!eid) return "[]";
+
+                const linksResponse = await requestJson("/ajax/links/list?eid=" + encodeURIComponent(eid) + "&_=strict" + encodeURIComponent(eid));
+                const linksDoc = parseHtml(linksResponse && linksResponse.result);
+                const servers = [...linksDoc.querySelectorAll("[data-lid]")].slice(0, 8);
+                const resolved = [];
+
+                for (const server of servers) {
+                  const lid = server.getAttribute("data-lid");
+                  if (!lid) continue;
+                  try {
+                    const viewResponse = await requestJson("/ajax/links/view?id=" + encodeURIComponent(lid) + "&_=strict" + encodeURIComponent(lid));
+                    const decoded = window.x.G((viewResponse && viewResponse.result) || "");
+                    const json = JSON.parse(decoded || "{}");
+                    if (!json.url) continue;
+                    resolved.push({
+                      name: (server.textContent || "").trim() || server.getAttribute("title") || "Server",
+                      url: json.url
+                    });
+                  } catch (_) {
+                  }
+                }
+
+                return JSON.stringify(resolved);
+              } catch (_) {
+                return "[]";
+              }
+            })();
+        """.trimIndent()
     }
 
     private fun buildPagedUrl(url: String, page: Int): String {
         if (page <= 1) return url
-        val joiner = if (url.contains("?")) "&" else "?"
-        return "$url${joiner}page=$page"
+        return if (url.contains("?")) "$url&page=$page" else "$url?page=$page"
     }
 
-    private fun parseSiteMediaUrl(url: String): SiteMedia {
-        val clean = url.substringBefore("?").trimEnd('/')
-        val parts = clean.split("/")
-        val type = parts.getOrNull(parts.lastIndex - 1) ?: throw ErrorLoadingException("Invalid type")
-        val id = parts.lastOrNull()?.toIntOrNull() ?: throw ErrorLoadingException("Invalid ID")
-        return SiteMedia(type = type, id = id)
-    }
-
-    private fun TmdbMedia.toSearchResponse(): SearchResponse? {
-        val mediaType = mediaType ?: when {
-            !title.isNullOrBlank() -> "movie"
-            !name.isNullOrBlank() -> "tv"
-            else -> null
-        } ?: return null
-
-        val id = id ?: return null
-        val resolvedTitle = title ?: name ?: return null
-        val year = (releaseDate ?: firstAirDate)?.substringBefore("-")?.toIntOrNull()
-
-        return if (mediaType == "movie") {
-            newMovieSearchResponse(resolvedTitle, "$mainUrl/movie/$id", TvType.Movie) {
-                posterUrl = posterPath.toPosterUrl()
-                this.year = year
-                voteAverage?.let { this.score = Score.from10(it) }
-            }
-        } else {
-            newTvSeriesSearchResponse(resolvedTitle, "$mainUrl/tv/$id", TvType.TvSeries) {
-                posterUrl = posterPath.toPosterUrl()
-                this.year = year
-                voteAverage?.let { this.score = Score.from10(it) }
-            }
-        }
-    }
-
-    private fun String?.toPosterUrl(): String? {
-        if (this.isNullOrBlank()) return null
-        return if (startsWith('/')) "https://image.tmdb.org/t/p/w500/$this" else this
+    private fun baseReferer(url: String): String {
+        return runCatching {
+            val uri = java.net.URI(url)
+            "${uri.scheme}://${uri.host}/"
+        }.getOrDefault("$mainUrl/")
     }
 
     private fun String.urlEncoded(): String = URLEncoder.encode(this, "UTF-8")
 
-    private fun normalizeTitle(value: String): String {
-        return value.lowercase()
-            .replace(Regex("""[^\p{L}\p{N}\s]"""), " ")
-            .replace(Regex("""\s+"""), " ")
-            .trim()
+    private fun String?.toPosterUrl(): String? {
+        if (this.isNullOrBlank()) return null
+        return if (startsWith("/")) "https://image.tmdb.org/t/p/w500/$this" else this
     }
 
-    data class SiteMedia(val type: String, val id: Int)
+    private fun String?.decodeJsString(): String? {
+        if (this == null || this == "null") return null
+        return runCatching { JSONArray("[$this]").getString(0) }.getOrDefault(this)
+    }
 
     data class LinkData(
+        val watchUrl: String? = null,
         val tmdbId: Int? = null,
         val imdbId: String? = null,
-        val type: String? = null,
-        val season: Int? = null,
-        val episode: Int? = null,
         val title: String? = null,
         val year: Int? = null,
+        val isTv: Boolean = false,
+        val season: Int? = null,
+        val episode: Int? = null,
     )
 
-    data class TmdbResults(
-        @JsonProperty("page") val page: Int? = null,
-        @JsonProperty("results") val results: List<TmdbMedia>? = null,
-        @JsonProperty("total_pages") val totalPages: Int? = null,
+    data class NativeEmbed(
+        val name: String,
+        val url: String,
     )
 
-    data class TmdbMedia(
+    data class TmdbSearchResults(
+        @JsonProperty("results") val results: List<TmdbSearchItem>? = null,
+    )
+
+    data class TmdbSearchItem(
         @JsonProperty("id") val id: Int? = null,
-        @JsonProperty("media_type") val mediaType: String? = null,
-        @JsonProperty("title") val title: String? = null,
-        @JsonProperty("name") val name: String? = null,
-        @JsonProperty("poster_path") val posterPath: String? = null,
-        @JsonProperty("release_date") val releaseDate: String? = null,
-        @JsonProperty("first_air_date") val firstAirDate: String? = null,
-        @JsonProperty("vote_average") val voteAverage: Double? = null,
     )
 
     data class TmdbDetail(
-        @JsonProperty("title") val title: String? = null,
-        @JsonProperty("name") val name: String? = null,
-        @JsonProperty("overview") val overview: String? = null,
-        @JsonProperty("poster_path") val posterPath: String? = null,
-        @JsonProperty("release_date") val releaseDate: String? = null,
-        @JsonProperty("first_air_date") val firstAirDate: String? = null,
-        @JsonProperty("vote_average") val voteAverage: Double? = null,
-        @JsonProperty("genres") val genres: List<TmdbGenre>? = null,
+        @JsonProperty("id") val id: Int? = null,
         @JsonProperty("external_ids") val externalIds: TmdbExternalIds? = null,
         @JsonProperty("videos") val videos: TmdbVideos? = null,
         @JsonProperty("seasons") val seasons: List<TmdbSeason>? = null,
     )
 
-    data class TmdbGenre(@JsonProperty("name") val name: String? = null)
+    data class TmdbExternalIds(
+        @JsonProperty("imdb_id") val imdbId: String? = null,
+    )
 
-    data class TmdbExternalIds(@JsonProperty("imdb_id") val imdbId: String? = null)
+    data class TmdbVideos(
+        @JsonProperty("results") val results: List<TmdbVideo>? = null,
+    )
 
     data class TmdbVideo(
         @JsonProperty("key") val key: String? = null,
         @JsonProperty("site") val site: String? = null,
     )
 
-    data class TmdbVideos(@JsonProperty("results") val results: List<TmdbVideo>? = null)
+    data class TmdbSeason(
+        @JsonProperty("season_number") val seasonNumber: Int? = null,
+    )
 
-    data class TmdbSeason(@JsonProperty("season_number") val seasonNumber: Int? = null)
-
-    data class TmdbSeasonDetail(@JsonProperty("episodes") val episodes: List<TmdbEpisode>? = null)
+    data class TmdbSeasonDetail(
+        @JsonProperty("episodes") val episodes: List<TmdbEpisode>? = null,
+    )
 
     data class TmdbEpisode(
         @JsonProperty("name") val name: String? = null,
