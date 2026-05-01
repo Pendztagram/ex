@@ -14,7 +14,9 @@ import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import org.jsoup.Jsoup
 import org.json.JSONArray
+import org.json.JSONObject
 import java.net.URLEncoder
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -286,55 +288,101 @@ class YflixProvider : MainAPI() {
     @SuppressLint("SetJavaScriptEnabled")
     private suspend fun resolveNativeEmbeds(info: LinkData): List<NativeEmbed> {
         val watchUrl = info.watchUrl ?: return emptyList()
-        val context = AcraApplication.context ?: return emptyList()
+        val session = acquireYflixSession(watchUrl) ?: return emptyList()
+
+        return try {
+            val watchHeaders = buildYflixHeaders(session.cookieHeader, session.userAgent)
+            val watchDoc = app.get(watchUrl, headers = watchHeaders, referer = "$mainUrl/").document
+            val dataId = watchDoc.selectFirst("#movie-rating")?.attr("data-id")?.trim().orEmpty()
+            if (dataId.isBlank()) return emptyList()
+
+            val episodeToken = evalJs(session.webView, "window.x.W(${dataId.toJsString()})").orEmpty()
+            if (episodeToken.isBlank()) return emptyList()
+
+            val episodeResponse = app.get(
+                "$mainUrl/ajax/episodes/list?id=${dataId.urlEncoded()}&_=${episodeToken.urlEncoded()}",
+                headers = buildYflixHeaders(session.cookieHeader, session.userAgent, "application/json, text/plain, */*"),
+                referer = watchUrl
+            ).parsedSafe<YflixAjaxResponse>() ?: return emptyList()
+
+            val episodeDoc = Jsoup.parse(episodeResponse.result.orEmpty())
+            val episodeNode = selectEpisodeNode(episodeDoc, info) ?: return emptyList()
+            val eid = episodeNode.attr("eid").trim()
+            if (eid.isBlank()) return emptyList()
+
+            val linksToken = evalJs(session.webView, "window.x.W(${eid.toJsString()})").orEmpty()
+            if (linksToken.isBlank()) return emptyList()
+
+            val linksResponse = app.get(
+                "$mainUrl/ajax/links/list?eid=${eid.urlEncoded()}&_=${linksToken.urlEncoded()}",
+                headers = buildYflixHeaders(session.cookieHeader, session.userAgent, "application/json, text/plain, */*"),
+                referer = watchUrl
+            ).parsedSafe<YflixAjaxResponse>() ?: return emptyList()
+
+            val linksDoc = Jsoup.parse(linksResponse.result.orEmpty())
+            linksDoc.select("[data-lid]").take(8).mapNotNull { server ->
+                val lid = server.attr("data-lid").trim()
+                if (lid.isBlank()) return@mapNotNull null
+
+                val viewToken = evalJs(session.webView, "window.x.W(${lid.toJsString()})").orEmpty()
+                if (viewToken.isBlank()) return@mapNotNull null
+
+                val viewResponse = app.get(
+                    "$mainUrl/ajax/links/view?id=${lid.urlEncoded()}&_=${viewToken.urlEncoded()}",
+                    headers = buildYflixHeaders(session.cookieHeader, session.userAgent, "application/json, text/plain, */*"),
+                    referer = watchUrl
+                ).parsedSafe<YflixAjaxResponse>() ?: return@mapNotNull null
+
+                val decoded = evalJs(session.webView, "window.x.G(${viewResponse.result.orEmpty().toJsString()})").orEmpty()
+                val url = runCatching { JSONObject(decoded).optString("url").trim() }.getOrDefault("")
+                if (url.isBlank()) return@mapNotNull null
+
+                NativeEmbed(
+                    name = server.text().trim().ifBlank { "Server" },
+                    url = url
+                )
+            }.distinctBy { it.url }
+        } finally {
+            destroyWebView(session.webView)
+        }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private suspend fun acquireYflixSession(watchUrl: String): YflixSession? {
+        val context = AcraApplication.context ?: return null
         val latch = CountDownLatch(1)
         val handler = Handler(Looper.getMainLooper())
+        val cookieManager = CookieManager.getInstance()
         var webView: WebView? = null
-        var resultJson: String? = null
-
-        val script = buildNativeResolveScript(info)
+        var ready = false
+        var userAgent = ""
 
         handler.post {
             try {
                 val wv = WebView(context).also { webView = it }
-                CookieManager.getInstance().setAcceptCookie(true)
-                CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true)
+                cookieManager.setAcceptCookie(true)
+                cookieManager.setAcceptThirdPartyCookies(wv, true)
                 wv.settings.apply {
                     javaScriptEnabled = true
                     domStorageEnabled = true
                     javaScriptCanOpenWindowsAutomatically = true
                     loadsImagesAutomatically = true
+                    userAgentString = USER_AGENT
+                    userAgent = userAgentString
                 }
                 wv.webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView, url: String) {
-                        fun pollResult(view: WebView, attempt: Int = 0) {
-                            val resultScript = """
-                                (function() {
-                                  return window.__YFLIX_DONE === true ? (window.__YFLIX_RESULT || "[]") : null;
-                                })();
-                            """.trimIndent()
-                            view.evaluateJavascript(resultScript) { raw ->
-                                if (raw != "null") {
-                                    resultJson = raw.decodeJsString()
-                                    latch.countDown()
-                                } else if (attempt >= 30) {
-                                    latch.countDown()
-                                } else {
-                                    handler.postDelayed({ pollResult(view, attempt + 1) }, 500L)
-                                }
-                            }
-                        }
                         fun probe(attempt: Int = 0) {
                             val readinessScript = """
                                 (function() {
-                                  return !!(window.jQuery && window.x && typeof window.x.G === "function" && document.querySelector("#movie-rating"));
+                                  return !!(window.jQuery && window.x && typeof window.x.W === "function" && typeof window.x.G === "function" && document.querySelector("#movie-rating"));
                                 })();
                             """.trimIndent()
-                            view.evaluateJavascript(readinessScript) { ready ->
-                                if (ready == "true") {
-                                    view.evaluateJavascript(script, null)
-                                    pollResult(view)
-                                } else if (attempt >= 20) {
+                            view.evaluateJavascript(readinessScript) { raw ->
+                                if (raw == "true") {
+                                    ready = true
+                                    latch.countDown()
+                                } else if (attempt >= 40) {
                                     latch.countDown()
                                 } else {
                                     handler.postDelayed({ probe(attempt + 1) }, 500L)
@@ -350,121 +398,85 @@ class YflixProvider : MainAPI() {
             }
         }
 
-        latch.await(18, TimeUnit.SECONDS)
+        latch.await(25, TimeUnit.SECONDS)
+        if (!ready) {
+            webView?.let { destroyWebView(it) }
+            return null
+        }
+
+        val cookieHeader = cookieManager.getCookie(watchUrl)
+            ?: cookieManager.getCookie(mainUrl)
+            ?: ""
+
+        return webView?.let {
+            YflixSession(
+                webView = it,
+                userAgent = userAgent.ifBlank { USER_AGENT },
+                cookieHeader = cookieHeader
+            )
+        }
+    }
+
+    private suspend fun evalJs(webView: WebView, script: String): String? {
+        val latch = CountDownLatch(1)
+        val handler = Handler(Looper.getMainLooper())
+        var result: String? = null
 
         handler.post {
             runCatching {
-                webView?.stopLoading()
-                webView?.destroy()
+                webView.evaluateJavascript("(function(){ try { return $script; } catch (e) { return null; } })();") { raw ->
+                    result = raw.decodeJsString()
+                    latch.countDown()
+                }
+            }.onFailure {
+                latch.countDown()
             }
         }
 
-        val payload = resultJson
-            ?.takeUnless { it.isBlank() || it == "null" }
-            ?: return emptyList()
-
-        return runCatching {
-            JSONArray(payload).let { array ->
-                buildList {
-                    for (index in 0 until array.length()) {
-                        val item = array.optJSONObject(index) ?: continue
-                        val url = item.optString("url").trim()
-                        if (url.isBlank()) continue
-                        add(
-                            NativeEmbed(
-                                name = item.optString("name").ifBlank { "Server ${index + 1}" },
-                                url = url
-                            )
-                        )
-                    }
-                }.distinctBy { it.url }
-            }
-        }.getOrDefault(emptyList())
+        latch.await(10, TimeUnit.SECONDS)
+        return result?.takeUnless { it == "null" }
     }
 
-    private fun buildNativeResolveScript(info: LinkData): String {
-        val isTv = info.isTv
-        val season = info.season ?: 0
-        val episode = info.episode ?: 0
-        val episodeHash = if (isTv) "#ep=$season,$episode" else null
+    private fun destroyWebView(webView: WebView) {
+        Handler(Looper.getMainLooper()).post {
+            runCatching {
+                webView.stopLoading()
+                webView.destroy()
+            }
+        }
+    }
 
-        return """
-            (function() {
-              window.__YFLIX_DONE = false;
-              window.__YFLIX_RESULT = null;
-              (async function() {
-              const parseHtml = (html) => new DOMParser().parseFromString(html || "", "text/html");
-              const requestJson = (path) => new Promise((resolve, reject) => {
-                window.jQuery.get(path)
-                  .done((data) => resolve(data))
-                  .fail((xhr, status, err) => reject(new Error(err || status || (xhr && xhr.status) || "request_failed")));
-              });
-              try {
-                const root = document.querySelector("#movie-rating");
-                const id = root ? root.getAttribute("data-id") : "";
-                if (!id || !window.x || typeof window.x.G !== "function") {
-                  window.__YFLIX_RESULT = "[]";
-                  return;
-                }
+    private fun buildYflixHeaders(
+        cookieHeader: String,
+        userAgent: String,
+        accept: String = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    ): Map<String, String> {
+        return buildMap {
+            put("User-Agent", userAgent.ifBlank { USER_AGENT })
+            put("Accept", accept)
+            put("Referer", "$mainUrl/")
+            put("Origin", mainUrl)
+            put("X-Requested-With", "XMLHttpRequest")
+            if (cookieHeader.isNotBlank()) put("Cookie", cookieHeader)
+        }
+    }
 
-                const episodeResponse = await requestJson("/ajax/episodes/list?id=" + encodeURIComponent(id) + "&_=strict" + encodeURIComponent(id));
-                const episodeDoc = parseHtml(episodeResponse && episodeResponse.result);
-                let episodeNode = null;
-                if (${if (isTv) "true" else "false"}) {
-                  const hash = ${episodeHash?.let { "\"$it\"" } ?: "null"};
-                  episodeNode = hash ? episodeDoc.querySelector('a[eid][href$="' + hash + '"]') : null;
-                  if (!episodeNode) {
-                    episodeNode = [...episodeDoc.querySelectorAll("ul.episodes[data-season] a[eid]")].find((node) => {
-                      const seasonNode = node.closest("ul.episodes[data-season]");
-                      const season = Number(seasonNode ? seasonNode.getAttribute("data-season") : 0);
-                      const episode = Number(node.getAttribute("num") || 0);
-                      return season === $season && episode === $episode;
-                    }) || null;
-                  }
-                } else {
-                  episodeNode = episodeDoc.querySelector("a[eid]");
-                }
-                if (!episodeNode) {
-                  window.__YFLIX_RESULT = "[]";
-                  return;
-                }
+    private fun selectEpisodeNode(
+        doc: org.jsoup.nodes.Document,
+        info: LinkData
+    ): org.jsoup.nodes.Element? {
+        if (!info.isTv) return doc.selectFirst("a[eid]")
 
-                const eid = episodeNode.getAttribute("eid");
-                if (!eid) {
-                  window.__YFLIX_RESULT = "[]";
-                  return;
-                }
+        val season = info.season ?: return null
+        val episode = info.episode ?: return null
+        val hash = "#ep=$season,$episode"
 
-                const linksResponse = await requestJson("/ajax/links/list?eid=" + encodeURIComponent(eid) + "&_=strict" + encodeURIComponent(eid));
-                const linksDoc = parseHtml(linksResponse && linksResponse.result);
-                const servers = [...linksDoc.querySelectorAll("[data-lid]")].slice(0, 8);
-                const resolved = [];
-
-                for (const server of servers) {
-                  const lid = server.getAttribute("data-lid");
-                  if (!lid) continue;
-                  try {
-                    const viewResponse = await requestJson("/ajax/links/view?id=" + encodeURIComponent(lid) + "&_=strict" + encodeURIComponent(lid));
-                    const decoded = window.x.G((viewResponse && viewResponse.result) || "");
-                    const json = JSON.parse(decoded || "{}");
-                    if (!json.url) continue;
-                    resolved.push({
-                      name: (server.textContent || "").trim() || server.getAttribute("title") || "Server",
-                      url: json.url
-                    });
-                  } catch (_) {
-                  }
-                }
-
-                window.__YFLIX_RESULT = JSON.stringify(resolved);
-              } catch (_) {
-                window.__YFLIX_RESULT = "[]";
-              } finally {
-                window.__YFLIX_DONE = true;
-              }
-              })();
-            })();
-        """.trimIndent()
+        return doc.selectFirst("""a[eid][href$="$hash"]""")
+            ?: doc.select("ul.episodes[data-season] a[eid]").firstOrNull { node ->
+                val seasonNode = node.closest("ul.episodes[data-season]")
+                seasonNode?.attr("data-season")?.toIntOrNull() == season &&
+                    node.attr("num").toIntOrNull() == episode
+            }
     }
 
     private fun buildPagedUrl(url: String, page: Int): String {
@@ -480,6 +492,8 @@ class YflixProvider : MainAPI() {
     }
 
     private fun String.urlEncoded(): String = URLEncoder.encode(this, "UTF-8")
+
+    private fun String.toJsString(): String = JSONObject.quote(this)
 
     private fun String?.toPosterUrl(): String? {
         if (this.isNullOrBlank()) return null
@@ -505,6 +519,16 @@ class YflixProvider : MainAPI() {
     data class NativeEmbed(
         val name: String,
         val url: String,
+    )
+
+    data class YflixSession(
+        val webView: WebView,
+        val userAgent: String,
+        val cookieHeader: String,
+    )
+
+    data class YflixAjaxResponse(
+        @JsonProperty("result") val result: String? = null,
     )
 
     data class TmdbSearchResults(
@@ -549,4 +573,9 @@ class YflixProvider : MainAPI() {
         @JsonProperty("still_path") val stillPath: String? = null,
         @JsonProperty("episode_number") val episodeNumber: Int? = null,
     )
+
+    companion object {
+        private const val USER_AGENT =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    }
 }
