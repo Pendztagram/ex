@@ -32,6 +32,7 @@ import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.newTvSeriesLoadResponse
 import com.lagradost.cloudstream3.toNewSearchResponseList
 import com.lagradost.cloudstream3.network.CloudflareKiller
+import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.INFER_TYPE
@@ -390,6 +391,24 @@ class CinemacityProvider : MainAPI() {
         val obj = if (trimmed.startsWith("{")) JSONObject(trimmed) else null
         val pageUrl = obj?.optString("pageUrl")?.takeIf { it.isNotBlank() }
 
+        pageUrl?.let { basePage ->
+            resolveRuntimeMediaUrl(basePage)?.let { runtimeUrl ->
+                callback(
+                    newExtractorLink(
+                        name,
+                        if (runtimeUrl.contains(".m3u8", true)) "$name HLS" else name,
+                        runtimeUrl,
+                        if (runtimeUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    ) {
+                        referer = basePage
+                        headers = requestHeaders + mapOf("Referer" to basePage)
+                        quality = extractQuality(runtimeUrl)
+                    }
+                )
+                return true
+            }
+        }
+
         obj?.optJSONArray("sizeEntries")?.takeIf { it.length() > 0 }?.let { entries ->
             return emitSizeEntryLinks(pageUrl ?: mainUrl, entries, callback)
         }
@@ -553,6 +572,36 @@ class CinemacityProvider : MainAPI() {
             }
         }
         return emitted
+    }
+
+    private suspend fun resolveRuntimeMediaUrl(pageUrl: String): String? {
+        val watchUrl = if (pageUrl.contains("#")) pageUrl else "$pageUrl#watch"
+        val mediaRegex = Regex("""https?://[^"'\\s]+(?:\.m3u8|\.mp4)[^"'\\s]*""", RegexOption.IGNORE_CASE)
+
+        val resolved = runCatching {
+            app.get(
+                watchUrl,
+                headers = requestHeaders,
+                referer = pageUrl,
+                interceptor = WebViewResolver(
+                    interceptUrl = mediaRegex,
+                    additionalUrls = listOf(
+                        Regex("""https?://[^"'\\s]+\.m3u8[^"'\\s]*""", RegexOption.IGNORE_CASE),
+                        Regex("""https?://[^"'\\s]+\.mp4[^"'\\s]*""", RegexOption.IGNORE_CASE),
+                    ),
+                    useOkhttp = false,
+                    timeout = 25_000L
+                )
+            ).url.substringBefore('#')
+        }.getOrNull() ?: return null
+
+        val normalizedPageUrl = pageUrl.substringBefore('#')
+        return resolved.takeIf {
+            it.startsWith("http", true) &&
+                it != normalizedPageUrl &&
+                !it.contains("/movies/", true) &&
+                !it.contains("/tv-series/", true)
+        }
     }
 
     private suspend fun emitSizeEntryLinks(
