@@ -15,7 +15,7 @@ import java.net.URLEncoder
 
 class YflixProvider : MainAPI() {
     override var mainUrl = "https://yflix.to"
-    override var name = "Yflix"
+    override var name = "Yflix🤑"
     override var lang = "en"
     override val hasMainPage = true
     override val hasQuickSearch = true
@@ -130,7 +130,12 @@ class YflixProvider : MainAPI() {
         if (nativeEmbeds.isNotEmpty()) {
             nativeEmbeds.forEach { native ->
                 runCatching {
-                    loadExtractor(native.url, info.watchUrl ?: baseReferer(native.url), subtitleCallback, callback)
+                    loadExtractor(
+                        native.url,
+                        "⌜ YFlix ⌟ | ${native.name}",
+                        subtitleCallback,
+                        callback
+                    )
                 }
             }
             return true
