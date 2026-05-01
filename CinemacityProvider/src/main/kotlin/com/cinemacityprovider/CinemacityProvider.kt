@@ -252,18 +252,24 @@ class CinemacityProvider : MainAPI() {
                 ?.associateBy { "${it.season}:${it.episode}" }
                 ?: emptyMap()
 
-        val fileArray = extractPlaylist(doc)
+        val fileArray = runCatching { extractPlaylist(doc) }.getOrElse { JSONArray() }
+        val sizeEntries = extractSizeEntries(url, page.text)
 
         val seasonRegex = Regex("Season\\s*(\\d+)", RegexOption.IGNORE_CASE)
         val episodeRegex = Regex("Episode\\s*(\\d+)", RegexOption.IGNORE_CASE)
 
         val episodeList = mutableListOf<Episode>()
 
-        val movieJson = fileArray.takeIf { it.length() > 0 }?.let { playlist ->
-            JSONObject().apply {
+        val movieJson = when {
+            fileArray.length() > 0 -> JSONObject().apply {
                 put("pageUrl", url)
-                put("playlist", playlist)
+                put("playlist", fileArray)
             }.toString()
+            sizeEntries.isNotEmpty() -> JSONObject().apply {
+                put("pageUrl", url)
+                put("sizeEntries", JSONArray(sizeEntries))
+            }.toString()
+            else -> null
         }
 
         if (tvtype == TvType.TvSeries) {
@@ -292,6 +298,32 @@ class CinemacityProvider : MainAPI() {
                         addDate(epMeta?.released)
                     }
                 }
+            }
+
+            if (episodeList.isEmpty() && sizeEntries.isNotEmpty()) {
+                sizeEntries
+                    .groupBy { parseSeasonEpisodeFromPath(it) }
+                    .mapNotNull { (seasonEpisode, entries) ->
+                        seasonEpisode?.let { it to entries }
+                    }
+                    .sortedWith(compareBy({ it.first.first }, { it.first.second }))
+                    .forEach { (seasonEpisode, entries) ->
+                        val (seasonNumber, episodeNumber) = seasonEpisode
+                        val epMeta = epMetaMap["$seasonNumber:$episodeNumber"]
+                        val epData = JSONObject().apply {
+                            put("pageUrl", url)
+                            put("sizeEntries", JSONArray(entries.sorted()))
+                        }.toString()
+
+                        episodeList += newEpisode(epData) {
+                            this.season = seasonNumber
+                            this.episode = episodeNumber
+                            this.name = epMeta?.name ?: "S${seasonNumber}E${episodeNumber}"
+                            this.description = epMeta?.overview
+                            this.posterUrl = epMeta?.thumbnail
+                            addDate(epMeta?.released)
+                        }
+                    }
             }
 
             return newTvSeriesLoadResponse(responseData?.meta?.name ?: title, url, TvType.TvSeries, episodeList) {
@@ -357,6 +389,10 @@ class CinemacityProvider : MainAPI() {
         }
         val obj = if (trimmed.startsWith("{")) JSONObject(trimmed) else null
         val pageUrl = obj?.optString("pageUrl")?.takeIf { it.isNotBlank() }
+
+        obj?.optJSONArray("sizeEntries")?.takeIf { it.length() > 0 }?.let { entries ->
+            return emitSizeEntryLinks(pageUrl ?: mainUrl, entries, callback)
+        }
 
         val rawFile = obj?.optString("file").orEmpty()
         if (rawFile.isNotBlank()) {
@@ -517,6 +553,86 @@ class CinemacityProvider : MainAPI() {
             }
         }
         return emitted
+    }
+
+    private suspend fun emitSizeEntryLinks(
+        pageUrl: String,
+        entries: JSONArray,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val rawEntries = buildList {
+            for (i in 0 until entries.length()) {
+                entries.optString(i).takeIf { it.isNotBlank() }?.let(::add)
+            }
+        }
+        if (rawEntries.isEmpty()) return false
+
+        val audios = rawEntries
+            .filter { it.endsWith(".m4a", true) }
+            .mapNotNull { path ->
+                val key = Regex("""_([^_/]+)\.m4a$""", RegexOption.IGNORE_CASE)
+                    .find(path)?.groupValues?.getOrNull(1) ?: return@mapNotNull null
+                Triple(key, titleCase(key), path)
+            }
+            .distinctBy { it.third }
+
+        val videos = rawEntries
+            .filter { it.endsWith(".mp4", true) }
+            .map { path ->
+                val res = Regex("""_(\d{3,4}p)\.mp4$""", RegexOption.IGNORE_CASE)
+                    .find(path)?.groupValues?.getOrNull(1)?.lowercase() ?: "mp4"
+                res to path
+            }
+            .distinctBy { it.second }
+
+        if (audios.isEmpty() || videos.isEmpty()) return false
+
+        var emitted = false
+        for ((_, langLabel, audioPath) in audios) {
+            for ((res, videoPath) in videos) {
+                val href = buildDownloadHref(pageUrl, videoPath, audioPath, emptyList())
+                callback(
+                    newExtractorLink(name, "$name Download $res $langLabel", href, INFER_TYPE) {
+                        referer = pageUrl
+                        headers = requestHeaders + mapOf("Referer" to pageUrl)
+                        quality = extractQuality(videoPath)
+                    }
+                )
+                emitted = true
+            }
+        }
+        return emitted
+    }
+
+    private suspend fun extractSizeEntries(pageUrl: String, html: String): List<String> {
+        val newsId = Regex("""/(\d+)-""").find(pageUrl)?.groupValues?.getOrNull(1) ?: return emptyList()
+        val userHash = Regex("""dle_login_hash\s*=\s*'([^']+)'""")
+            .find(html)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?: return emptyList()
+
+        val response = runCatching {
+            app.get(
+                "$mainUrl/engine/ajax/controller.php?mod=dh&action=sizes" +
+                    "&news_id=$newsId&user_hash=$userHash",
+                headers = requestHeaders + mapOf("Accept" to "application/json, text/plain, */*"),
+                referer = pageUrl
+            ).text
+        }.getOrNull() ?: return emptyList()
+
+        val json = runCatching { JSONObject(response) }.getOrNull() ?: return emptyList()
+        return json.keys().asSequence()
+            .filter { it.endsWith(".mp4", true) || it.endsWith(".m4a", true) }
+            .toList()
+            .sorted()
+    }
+
+    private fun parseSeasonEpisodeFromPath(path: String): Pair<Int, Int>? {
+        val match = Regex("""s(\d{1,2})e(\d{1,2})""", RegexOption.IGNORE_CASE).find(path) ?: return null
+        val season = match.groupValues.getOrNull(1)?.toIntOrNull() ?: return null
+        val episode = match.groupValues.getOrNull(2)?.toIntOrNull() ?: return null
+        return season to episode
     }
 
     private fun resolveMediaUrl(base: String, path: String): String {
