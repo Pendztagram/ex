@@ -307,6 +307,23 @@ class YflixProvider : MainAPI() {
                 }
                 wv.webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView, url: String) {
+                        fun pollResult(view: WebView, attempt: Int = 0) {
+                            val resultScript = """
+                                (function() {
+                                  return window.__YFLIX_DONE === true ? (window.__YFLIX_RESULT || "[]") : null;
+                                })();
+                            """.trimIndent()
+                            view.evaluateJavascript(resultScript) { raw ->
+                                if (raw != "null") {
+                                    resultJson = raw.decodeJsString()
+                                    latch.countDown()
+                                } else if (attempt >= 30) {
+                                    latch.countDown()
+                                } else {
+                                    handler.postDelayed({ pollResult(view, attempt + 1) }, 500L)
+                                }
+                            }
+                        }
                         fun probe(attempt: Int = 0) {
                             val readinessScript = """
                                 (function() {
@@ -315,10 +332,8 @@ class YflixProvider : MainAPI() {
                             """.trimIndent()
                             view.evaluateJavascript(readinessScript) { ready ->
                                 if (ready == "true") {
-                                    view.evaluateJavascript(script) { raw ->
-                                        resultJson = raw.decodeJsString()
-                                        latch.countDown()
-                                    }
+                                    view.evaluateJavascript(script, null)
+                                    pollResult(view)
                                 } else if (attempt >= 20) {
                                     latch.countDown()
                                 } else {
@@ -374,7 +389,10 @@ class YflixProvider : MainAPI() {
         val episodeHash = if (isTv) "#ep=$season,$episode" else null
 
         return """
-            (async function() {
+            (function() {
+              window.__YFLIX_DONE = false;
+              window.__YFLIX_RESULT = null;
+              (async function() {
               const parseHtml = (html) => new DOMParser().parseFromString(html || "", "text/html");
               const requestJson = (path) => new Promise((resolve, reject) => {
                 window.jQuery.get(path)
@@ -384,7 +402,10 @@ class YflixProvider : MainAPI() {
               try {
                 const root = document.querySelector("#movie-rating");
                 const id = root ? root.getAttribute("data-id") : "";
-                if (!id || !window.x || typeof window.x.G !== "function") return "[]";
+                if (!id || !window.x || typeof window.x.G !== "function") {
+                  window.__YFLIX_RESULT = "[]";
+                  return;
+                }
 
                 const episodeResponse = await requestJson("/ajax/episodes/list?id=" + encodeURIComponent(id) + "&_=strict" + encodeURIComponent(id));
                 const episodeDoc = parseHtml(episodeResponse && episodeResponse.result);
@@ -403,10 +424,16 @@ class YflixProvider : MainAPI() {
                 } else {
                   episodeNode = episodeDoc.querySelector("a[eid]");
                 }
-                if (!episodeNode) return "[]";
+                if (!episodeNode) {
+                  window.__YFLIX_RESULT = "[]";
+                  return;
+                }
 
                 const eid = episodeNode.getAttribute("eid");
-                if (!eid) return "[]";
+                if (!eid) {
+                  window.__YFLIX_RESULT = "[]";
+                  return;
+                }
 
                 const linksResponse = await requestJson("/ajax/links/list?eid=" + encodeURIComponent(eid) + "&_=strict" + encodeURIComponent(eid));
                 const linksDoc = parseHtml(linksResponse && linksResponse.result);
@@ -429,10 +456,13 @@ class YflixProvider : MainAPI() {
                   }
                 }
 
-                return JSON.stringify(resolved);
+                window.__YFLIX_RESULT = JSON.stringify(resolved);
               } catch (_) {
-                return "[]";
+                window.__YFLIX_RESULT = "[]";
+              } finally {
+                window.__YFLIX_DONE = true;
               }
+              })();
             })();
         """.trimIndent()
     }
