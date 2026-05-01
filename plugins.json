@@ -152,10 +152,10 @@
     },
     {
         "iconUrl": "https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/Icons/Cinemacity.png",
-        "fileHash": "sha256-af441ccedd694c644279e3aa786406f451b387588f2a4fc50ec6c56bda62cbc7",
+        "fileHash": "sha256-65119d7e254bea043fa817c5bcf32651de4da82f02b51e5f5a14b6aebda45240",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 51432,
+        "fileSize": 58862,
         "status": 1,
         "language": "en",
         "authors": [
