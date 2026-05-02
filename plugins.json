@@ -652,6 +652,29 @@
         "name": "MovieBoxProvider"
     },
     {
+        "iconUrl": "https://raw.githubusercontent.com/Sushan64/NetMirror-Extension/refs/heads/master/Netmirror/logo.jpeg",
+        "fileHash": "sha256-c8bdf30cdd377d38d5baff5ef0363c94bf2327f9987cff95a4950bfa189500c3",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/Pendztagram/ex",
+        "fileSize": 35042,
+        "status": 3,
+        "language": "en",
+        "authors": [
+            "OpenAI"
+        ],
+        "tvTypes": [
+            "Movie",
+            "TvSeries",
+            "Anime",
+            "AsianDrama"
+        ],
+        "version": 1,
+        "internalName": "NetMirrorProvider",
+        "description": "NetMirror search and streaming provider with live playlist fallback.",
+        "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/NetMirrorProvider.cs3",
+        "name": "NetMirrorProvider"
+    },
+    {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://new18.ngefilm.site&size=%size%",
         "fileHash": "sha256-adbe04e1f790f3e96cbe1b6693cd0928889bdfbbf3cc6f5419f8527de1b3fb73",
         "apiVersion": 1,
