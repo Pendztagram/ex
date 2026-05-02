@@ -653,14 +653,14 @@
     },
     {
         "iconUrl": "https://raw.githubusercontent.com/Sushan64/NetMirror-Extension/refs/heads/master/Netmirror/logo.jpeg",
-        "fileHash": "sha256-c8bdf30cdd377d38d5baff5ef0363c94bf2327f9987cff95a4950bfa189500c3",
+        "fileHash": "sha256-60d8d7bd83bab27e0831b574ad3059640222fd4959d6f2ef7d1e44aee495163a",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 35042,
-        "status": 3,
-        "language": "en",
+        "fileSize": 37826,
+        "status": 1,
+        "language": "id",
         "authors": [
-            "OpenAI"
+            "Duro92"
         ],
         "tvTypes": [
             "Movie",
