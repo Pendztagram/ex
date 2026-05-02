@@ -653,10 +653,10 @@
     },
     {
         "iconUrl": "https://raw.githubusercontent.com/Sushan64/NetMirror-Extension/refs/heads/master/Netmirror/logo.jpeg",
-        "fileHash": "sha256-8f8f51e8faebf46c19db15273aeb6bedcfed2298200f1609c5887cc6ac37f35b",
+        "fileHash": "sha256-93359970af1c466309f78dbeefbcedc504fb088f15dd85a20c5ac5c9608b10f7",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 37903,
+        "fileSize": 52644,
         "status": 1,
         "language": "id",
         "authors": [
