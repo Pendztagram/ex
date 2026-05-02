@@ -297,7 +297,7 @@ class NetMirrorProvider : MainAPI() {
             "$streamUrl/playlist.php?id=$id&t=${title.urlEncoded()}&h=x&tm=$unixTime",
             headers = ajaxHeaders,
             referer = "$mainUrl/"
-        ).parsedSafe<List<PlaylistItem>>()
+        ).parsedSafe<Array<PlaylistItem>>()?.toList()
         if (!direct.isNullOrEmpty()) return direct
 
         val postToken = app.post(
@@ -312,7 +312,7 @@ class NetMirrorProvider : MainAPI() {
             "$streamUrl/playlist.php?id=$id&t=${title.urlEncoded()}&h=${postToken.urlEncoded()}&tm=$unixTime",
             headers = ajaxHeaders,
             referer = "$mainUrl/"
-        ).parsedSafe()
+        ).parsedSafe<Array<PlaylistItem>>()?.toList()
     }
 
     private suspend fun resolveTitleFromPlaylist(id: String): String? {
