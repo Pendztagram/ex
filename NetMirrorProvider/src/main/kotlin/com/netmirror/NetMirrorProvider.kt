@@ -6,6 +6,8 @@ import com.lagradost.cloudstream3.Actor
 import com.lagradost.cloudstream3.ActorData
 import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.ErrorLoadingException
+import com.lagradost.cloudstream3.HomePageList
+import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.MainPageRequest
@@ -14,7 +16,9 @@ import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.mainPageOf
 import com.lagradost.cloudstream3.newEpisode
+import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.newMovieLoadResponse
 import com.lagradost.cloudstream3.newMovieSearchResponse
 import com.lagradost.cloudstream3.newSubtitleFile
@@ -31,8 +35,8 @@ class NetMirrorProvider : MainAPI() {
     override var mainUrl = "https://net22.cc"
     private val streamUrl = "https://net52.cc"
     override var name = "NetMirror"
-    override var lang = "en"
-    override val hasMainPage = false
+    override var lang = "id"
+    override val hasMainPage = true
     override val hasQuickSearch = true
     override val supportedTypes = setOf(
         TvType.Movie,
@@ -48,8 +52,39 @@ class NetMirrorProvider : MainAPI() {
         "User-Agent" to browserUserAgent
     )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest) =
-        throw ErrorLoadingException("NetMirror home is auth-gated")
+    override val mainPage = mainPageOf(
+        "" to "Top Searches"
+    )
+
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        if (page != 1) return newHomePageResponse(emptyList(), false)
+
+        val payload = app.get(
+            "$mainUrl/search.php?t=$unixTime",
+            headers = ajaxHeaders,
+            referer = "$mainUrl/home"
+        ).parsedSafe<SearchData>() ?: return newHomePageResponse(emptyList(), false)
+
+        val items = payload.searchResult
+            .take(12)
+            .mapNotNull { item ->
+                val title = item.t.takeIf { it.isNotBlank() } ?: resolveTitleFromPlaylist(item.id)
+                title?.takeIf { it.isNotBlank() }?.let {
+                    newMovieSearchResponse(
+                        it,
+                        LoadPayload(item.id, it).toJson(),
+                        TvType.Movie
+                    ) {
+                        this.posterUrl = posterUrl(item.id)
+                    }
+                }
+            }
+
+        return newHomePageResponse(
+            listOf(HomePageList(request.name, items)),
+            hasNext = false
+        )
+    }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val payload = app.get(
@@ -278,6 +313,13 @@ class NetMirrorProvider : MainAPI() {
             headers = ajaxHeaders,
             referer = "$mainUrl/"
         ).parsedSafe()
+    }
+
+    private suspend fun resolveTitleFromPlaylist(id: String): String? {
+        return fetchPlaylist(id, "NetMirror")
+            ?.firstOrNull()
+            ?.title
+            ?.takeIf { it.isNotBlank() }
     }
 
     private fun posterUrl(id: String): String = "https://imgcdn.kim/poster/v/$id.jpg"

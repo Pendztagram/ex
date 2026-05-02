@@ -7,12 +7,12 @@ android {
 }
 
 cloudstream {
-    language = "en"
+    language = "id"
 
     description = "NetMirror search and streaming provider with live playlist fallback."
-    authors = listOf("OpenAI")
+    authors = listOf("Duro92")
 
-    status = 3
+    status = 1 // Ok
     tvTypes = listOf(
         "Movie",
         "TvSeries",
