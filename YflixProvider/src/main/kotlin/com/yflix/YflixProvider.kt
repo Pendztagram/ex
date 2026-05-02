@@ -3,10 +3,14 @@ package com.yflix
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
+import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.jsoup.Jsoup
@@ -128,17 +132,29 @@ class YflixProvider : MainAPI() {
         val info = tryParseJson<LinkData>(data) ?: return false
         val nativeEmbeds = resolveNativeEmbeds(info)
         if (nativeEmbeds.isNotEmpty()) {
+            var found = false
             nativeEmbeds.forEach { native ->
                 runCatching {
+                    if (native.url.startsWith("$mainUrl/iframe/", true)) {
+                        found = loadWebViewEmbed(
+                            native.url,
+                            info.watchUrl ?: "$mainUrl/",
+                            "YFlix | ${native.name}",
+                            callback
+                        ) || found
+                        return@runCatching
+                    }
                     loadExtractor(
                         native.url,
                         "⌜ YFlix ⌟ | ${native.name}",
                         subtitleCallback,
-                        callback
-                    )
+                    ) { link ->
+                        found = true
+                        callback(link)
+                    }
                 }
             }
-            return true
+            if (found) return true
         }
 
         var found = false
@@ -321,8 +337,7 @@ class YflixProvider : MainAPI() {
                     referer = watchUrl
                 ).parsedSafe<YflixAjaxResponse>() ?: return@mapNotNull null
 
-                val decoded = decodePayload(viewResponse.result.orEmpty())
-                val url = runCatching { JSONObject(decoded).optString("url").trim() }.getOrDefault("")
+                val url = extractDecodedUrl(decodePayload(viewResponse.result.orEmpty()))
                 if (url.isBlank()) return@mapNotNull null
 
                 NativeEmbed(
@@ -332,6 +347,43 @@ class YflixProvider : MainAPI() {
                 )
             }.distinctBy { it.url }
         }.getOrDefault(emptyList())
+    }
+
+    private suspend fun loadWebViewEmbed(
+        url: String,
+        referer: String,
+        sourceName: String,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val mediaRes = app.get(
+            url,
+            referer = referer,
+            interceptor = WebViewResolver(
+                Regex("""https?://[^"'\\s]+?\.(?:m3u8|mp4)(?:\?[^"'\\s]*)?"""),
+                useOkhttp = true,
+                timeout = 20_000L
+            )
+        )
+
+        val mediaUrl = mediaRes.url
+        val type = when {
+            mediaUrl.contains(".m3u8", true) -> ExtractorLinkType.M3U8
+            mediaUrl.contains(".mp4", true) -> INFER_TYPE
+            else -> return false
+        }
+
+        callback(
+            newExtractorLink(sourceName, sourceName, mediaUrl, type) {
+                this.referer = referer
+                this.headers = mapOf(
+                    "Accept" to "*/*",
+                    "Referer" to referer,
+                    "Origin" to mainUrl,
+                    "User-Agent" to USER_AGENT,
+                )
+            }
+        )
+        return true
     }
 
     private suspend fun decodeToken(value: String?): String {
@@ -347,7 +399,19 @@ class YflixProvider : MainAPI() {
         val body = """{"text":${JSONObject.quote(value)}}""".toRequestBody(jsonMediaType)
         return runCatching {
             val res = app.post(DEC_MOVIES_FLIX, requestBody = body).text
-            JSONObject(res).optString("result")
+            JSONObject(res).opt("result")?.toString().orEmpty()
+        }.getOrDefault("")
+    }
+
+    private fun extractDecodedUrl(decoded: String): String {
+        if (decoded.isBlank()) return ""
+        return runCatching {
+            val root = JSONObject(decoded)
+            when (val result = root.opt("result")) {
+                is JSONObject -> result.optString("url")
+                is String -> runCatching { JSONObject(result).optString("url") }.getOrDefault(result)
+                else -> root.optString("url")
+            }.trim()
         }.getOrDefault("")
     }
 
