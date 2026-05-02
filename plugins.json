@@ -939,10 +939,10 @@
     },
     {
         "iconUrl": "https://yflix.to/favicon.ico",
-        "fileHash": "sha256-b0353887c5db0f2eee9218ec86674f5164bbe2ca4f4dcee8df26a018a0274416",
+        "fileHash": "sha256-a99117e09d385a2c81665f79fce13dcef4061c2e046a050121b4762bf3fd75ca",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 49604,
+        "fileSize": 52781,
         "status": 1,
         "language": "en",
         "authors": [
