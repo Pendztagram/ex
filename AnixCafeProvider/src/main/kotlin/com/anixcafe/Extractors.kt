@@ -139,6 +139,10 @@ object AnixCafeExtractorHelper {
         return lower.contains("facebook.com/plugins") || lower.contains("histats.com")
     }
 
+    fun isUnsupportedPlayerFrame(url: String): Boolean {
+        return url.contains("videoplayer.vip", true)
+    }
+
     private fun extractMediaCandidates(text: String, baseUrl: String): Set<String> {
         if (text.isBlank()) return emptySet()
         val results = linkedSetOf<String>()
@@ -175,7 +179,6 @@ object AnixCafeExtractorHelper {
     private fun shouldFollow(url: String): Boolean {
         val lower = url.lowercase()
         return listOf(
-            "videoplayer.vip",
             "dailymotion.com",
             "ok.ru",
             "playmogo.com",

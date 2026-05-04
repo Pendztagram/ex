@@ -121,7 +121,10 @@ class AnixCafeProvider : MainAPI() {
         }
 
         candidates
-            .filterNot { (url, _) -> AnixCafeExtractorHelper.isNoiseFrame(url) }
+            .filterNot { (url, _) ->
+                AnixCafeExtractorHelper.isNoiseFrame(url) ||
+                    AnixCafeExtractorHelper.isUnsupportedPlayerFrame(url)
+            }
             .amap { (url, label) ->
                 AnixCafeExtractorHelper.resolveLink(
                     url = AnixCafeExtractorHelper.normalizeUrl(url, data) ?: return@amap,
