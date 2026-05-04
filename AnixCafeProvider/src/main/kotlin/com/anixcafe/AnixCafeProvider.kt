@@ -2,12 +2,9 @@ package com.anixcafe
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import java.net.URI
 import java.net.URLEncoder
-import java.util.Base64
 
 class AnixCafeProvider : MainAPI() {
     override var mainUrl = "https://anixcafe.com"
@@ -67,10 +64,7 @@ class AnixCafeProvider : MainAPI() {
             .filter { it.isNotBlank() }
             .distinct()
 
-        val plot = document.selectFirst(".bigcontent .desc, .info-content .desc, .entry-content p")
-            ?.text()
-            ?.trim()
-            ?.ifBlank { null }
+        val plot = document.extractSynopsis()
 
         val episodes = document.select(".eplister a[href], .episodelist a[href], ul.episodios a[href]")
             .mapNotNull { it.toEpisode() }
@@ -121,16 +115,16 @@ class AnixCafeProvider : MainAPI() {
 
         document.select("select.mirror option[value]").forEach { option ->
             val label = option.text().trim().ifBlank { "Mirror" }
-            decodeMirror(option.attr("value")).forEach { mirror ->
+            AnixCafeExtractorHelper.decodeMirror(option.attr("value")).forEach { mirror ->
                 candidates.add(mirror to label)
             }
         }
 
         candidates
-            .filterNot { (url, _) -> isNoiseFrame(url) }
+            .filterNot { (url, _) -> AnixCafeExtractorHelper.isNoiseFrame(url) }
             .amap { (url, label) ->
-                resolveLink(
-                    url = normalizeUrl(url, data) ?: return@amap,
+                AnixCafeExtractorHelper.resolveLink(
+                    url = AnixCafeExtractorHelper.normalizeUrl(url, data) ?: return@amap,
                     label = label,
                     referer = data,
                     emitted = emitted,
@@ -145,59 +139,6 @@ class AnixCafeProvider : MainAPI() {
             .forEach { runCatching { loadExtractor(it, data, subtitleCallback, callback) } }
 
         return true
-    }
-
-    private suspend fun resolveLink(
-        url: String,
-        label: String,
-        referer: String,
-        emitted: MutableSet<String>,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        if (!emitted.add(url)) return
-
-        if (isDirectMedia(url)) {
-            callback(
-                newExtractorLink(
-                    source = name,
-                    name = "$name $label",
-                    url = url,
-                    type = if (url.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                ) {
-                    this.referer = referer
-                    this.quality = qualityFromName(label)
-                    this.headers = mapOf("Referer" to referer)
-                }
-            )
-            return
-        }
-
-        runCatching { loadExtractor(url, referer, subtitleCallback, callback) }
-
-        val response = runCatching { app.get(url, referer = referer) }.getOrNull() ?: return
-        val nested = linkedSetOf<String>()
-        nested.addAll(extractMediaCandidates(response.text, url))
-
-        response.document.select("source[src], video[src], iframe[src]").forEach { element ->
-            element.attr("abs:src").ifBlank { element.attr("src") }
-                .takeIf { it.isNotBlank() }
-                ?.let { normalizeUrl(it, url) }
-                ?.let(nested::add)
-        }
-
-        response.document.select("script").forEach { script ->
-            val data = script.data()
-            if (data.contains("eval(function(p,a,c,k,e,d)", true)) {
-                runCatching { getAndUnpack(data) }
-                    .getOrNull()
-                    ?.let { nested.addAll(extractMediaCandidates(it, url)) }
-            }
-        }
-
-        nested.forEach { nestedUrl ->
-            resolveLink(nestedUrl, label, url, emitted, subtitleCallback, callback)
-        }
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
@@ -245,43 +186,6 @@ class AnixCafeProvider : MainAPI() {
         }
     }
 
-    private fun decodeMirror(value: String): List<String> {
-        if (value.isBlank()) return emptyList()
-        val decoded = runCatching {
-            String(Base64.getDecoder().decode(value.trim()))
-        }.getOrElse { value }
-
-        val document = Jsoup.parse(decoded)
-        val links = linkedSetOf<String>()
-        document.select("iframe[src], source[src], video[src], a[href]").forEach { element ->
-            element.attr("src").ifBlank { element.attr("href") }
-                .takeIf { it.isNotBlank() }
-                ?.let(links::add)
-        }
-        Regex("""https?://[^\s"'<>\\]+""").findAll(decoded).forEach { links.add(it.value) }
-        return links.toList()
-    }
-
-    private fun extractMediaCandidates(text: String, baseUrl: String): Set<String> {
-        if (text.isBlank()) return emptySet()
-        val results = linkedSetOf<String>()
-        val patterns = listOf(
-            Regex("""https?://[^\s"'<>\\]+""", RegexOption.IGNORE_CASE),
-            Regex("""(?:file|src|source|video_url|play_url|hls)\s*[:=]\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE),
-            Regex("""["']((?:/|//)[^"']+\.(?:m3u8|mp4)[^"']*)["']""", RegexOption.IGNORE_CASE),
-        )
-
-        patterns.forEach { pattern ->
-            pattern.findAll(text).forEach { match ->
-                val raw = match.groupValues.getOrNull(1)?.takeIf { it.isNotBlank() } ?: match.value
-                normalizeUrl(raw, baseUrl)?.let { url ->
-                    if (isDirectMedia(url) || shouldFollow(url)) results.add(url)
-                }
-            }
-        }
-        return results
-    }
-
     private fun getProperAnimeLink(url: String): String {
         if (url.contains("/anime/", true)) return url
 
@@ -316,6 +220,22 @@ class AnixCafeProvider : MainAPI() {
             ?.ifBlank { null }
     }
 
+    private fun Document.extractSynopsis(): String? {
+        val synopsisElement = selectFirst(
+            ".single-info.bixbox .infox .info-content .desc, " +
+                ".single-info .info-content .desc, " +
+                ".bigcontent .info-content .desc, " +
+                ".bigcontent .desc, " +
+                ".entry-content p"
+        ) ?: return null
+
+        synopsisElement.select(".colap, script, style").remove()
+        return synopsisElement.text()
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+            .ifBlank { null }
+    }
+
     private fun getType(typeLabel: String?, url: String): TvType {
         val value = typeLabel.orEmpty()
         return when {
@@ -336,51 +256,6 @@ class AnixCafeProvider : MainAPI() {
 
     private fun extractYear(value: String): Int? {
         return Regex("""(19|20)\d{2}""").find(value)?.value?.toIntOrNull()
-    }
-
-    private fun qualityFromName(value: String): Int {
-        return Regex("""\b(2160|1440|1080|720|480|360|240|4K)\b""", RegexOption.IGNORE_CASE)
-            .find(value)
-            ?.value
-            ?.let { if (it.equals("4K", true)) "2160" else it }
-            ?.toIntOrNull()
-            ?: Qualities.Unknown.value
-    }
-
-    private fun isDirectMedia(url: String): Boolean {
-        return Regex("""(?i)\.(m3u8|mp4)(?:$|[?#&])""").containsMatchIn(url)
-    }
-
-    private fun shouldFollow(url: String): Boolean {
-        val lower = url.lowercase()
-        return listOf(
-            "videoplayer.vip",
-            "dailymotion.com",
-            "ok.ru",
-            "playmogo.com",
-            "luluvdo.com",
-            "dood",
-            "stream",
-        ).any { lower.contains(it) }
-    }
-
-    private fun isNoiseFrame(url: String): Boolean {
-        val lower = url.lowercase()
-        return lower.contains("facebook.com/plugins") || lower.contains("histats.com")
-    }
-
-    private fun normalizeUrl(raw: String, baseUrl: String): String? {
-        val clean = raw.trim()
-            .replace("\\/", "/")
-            .replace("&amp;", "&")
-            .takeIf { it.isNotBlank() && !it.startsWith("javascript:", true) && !it.startsWith("data:", true) }
-            ?: return null
-
-        return when {
-            clean.startsWith("//") -> "https:$clean"
-            clean.startsWith("http://", true) || clean.startsWith("https://", true) -> clean
-            else -> runCatching { URI(baseUrl).resolve(clean).toString() }.getOrNull()
-        }
     }
 
     private fun String.cleanTitle(): String {

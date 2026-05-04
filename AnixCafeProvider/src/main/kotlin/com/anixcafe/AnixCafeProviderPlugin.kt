@@ -8,5 +8,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
 class AnixCafeProviderPlugin : Plugin() {
     override fun load(context: Context) {
         registerMainAPI(AnixCafeProvider())
+        registerExtractorAPI(AnixCafeVideoplayer())
+        registerExtractorAPI(Playmogo())
     }
 }
