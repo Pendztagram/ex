@@ -8,7 +8,7 @@ import java.net.URLEncoder
 
 class AnixCafeProvider : MainAPI() {
     override var mainUrl = "https://anixcafe.com"
-    override var name = "AnixCafe"
+    override var name = "AnixCafe😇"
     override var lang = "id"
     override val hasMainPage = true
     override val hasDownloadSupport = true
