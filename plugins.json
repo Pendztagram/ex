@@ -435,10 +435,10 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://sv4.kazefuri.cloud&size=%size%",
-        "fileHash": "sha256-3a91141345c8d3997d8a78d8e2ace23d0812f57aac870c5c7f73732290150af0",
+        "fileHash": "sha256-8d784808d1a60c495b2c601ef9dc82e671a56f01b2a39624fe848df1cedc237c",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 41891,
+        "fileSize": 41897,
         "status": 1,
         "language": "id",
         "authors": [
