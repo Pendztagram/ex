@@ -87,6 +87,27 @@
         "name": "AnimexinProvider"
     },
     {
+        "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://anixcafe.com&size=%size%",
+        "fileHash": "sha256-2adfc8e36c00c8259182f0703c339ca7747a5e8b5f0266d0a80edb6c9d272b7e",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/Pendztagram/ex",
+        "fileSize": 26004,
+        "status": 1,
+        "language": "id",
+        "authors": [
+            "Hexated"
+        ],
+        "tvTypes": [
+            "AnimeMovie",
+            "OVA",
+            "Anime"
+        ],
+        "version": 1,
+        "internalName": "AnixCafeProvider",
+        "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/AnixCafeProvider.cs3",
+        "name": "AnixCafeProvider"
+    },
+    {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://anoboy.be&size=%size%",
         "fileHash": "sha256-53cac281b5bb6d5fd50d8a466eb45107efe9199a1a884a3a1af0f11d198c3eef",
         "apiVersion": 1,
