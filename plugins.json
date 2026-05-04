@@ -88,10 +88,10 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://anixcafe.com&size=%size%",
-        "fileHash": "sha256-e3490ce38f01e6c0f45a8dde5151c87f718ea6c27a00cc9807cc526b60b9d349",
+        "fileHash": "sha256-c39f009948e8696710a48fe66a0db58ecb5e67ae962b7a015b3b41046490b977",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 27478,
+        "fileSize": 27487,
         "status": 1,
         "language": "id",
         "authors": [
