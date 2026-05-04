@@ -9,7 +9,7 @@ import java.net.URLEncoder
 
 class KazefuriProvider : MainAPI() {
     override var mainUrl = "https://sv4.kazefuri.cloud"
-    override var name = "Kazefuri"
+    override var name = "Kazefuri🤩"
     override var lang = "id"
     override val hasMainPage = true
     override val hasDownloadSupport = true
