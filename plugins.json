@@ -739,6 +739,27 @@
         "name": "Ngefilm"
     },
     {
+        "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://nimegami.id&size=%size%",
+        "fileHash": "sha256-8952c54dfe43abc6a2989ecdf84dc295aed3d94140a0c23f21a7b9a5f1dc63cd",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/Pendztagram/ex",
+        "fileSize": 27560,
+        "status": 1,
+        "language": "id",
+        "authors": [
+            "duro92"
+        ],
+        "tvTypes": [
+            "AnimeMovie",
+            "OVA",
+            "Anime"
+        ],
+        "version": 1,
+        "internalName": "NimegamiProvider",
+        "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/NimegamiProvider.cs3",
+        "name": "NimegamiProvider"
+    },
+    {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://nomat.site&size=%size%",
         "fileHash": "sha256-1bb987add854edc2f61320a57d3547bd5d60073686cb3fd11e2d872996452520",
         "apiVersion": 1,
