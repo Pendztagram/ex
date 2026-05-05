@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import kotlinx.coroutines.runBlocking
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URI
@@ -128,6 +129,7 @@ class NimegamiProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val emitted = linkedSetOf<String>()
+        var handled = false
         val sources = decodeEpisodeSources(data).ifEmpty {
             val document = app.get(data, referer = "$mainUrl/").document
             document.select(".list_eps_stream li.select-eps[data]").firstOrNull()?.attr("data")
@@ -139,6 +141,27 @@ class NimegamiProvider : MainAPI() {
             source.url.orEmpty().forEach { rawUrl ->
                 val streamPage = normalizeUrl(rawUrl, mainUrl) ?: return@forEach
                 val label = source.format?.ifBlank { null } ?: "Nimegami"
+                handled = true
+                runCatching {
+                    loadExtractor(streamPage, "$mainUrl/", subtitleCallback) { link ->
+                        runBlocking {
+                            callback(
+                                newExtractorLink(
+                                    source = link.source,
+                                    name = "$name $label",
+                                    url = link.url,
+                                    type = link.type
+                                ) {
+                                    referer = link.referer
+                                    quality = qualityFromName(label)
+                                    headers = link.headers + mapOf("Range" to "bytes=0-")
+                                    extractorData = link.extractorData
+                                }
+                            )
+                        }
+                    }
+                }
+
                 val direct = extractStreamUrl(streamPage)
                 if (direct != null && emitted.add(direct)) {
                     callback(
@@ -148,9 +171,13 @@ class NimegamiProvider : MainAPI() {
                             url = direct,
                             type = if (direct.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                         ) {
-                            referer = streamPage
+                            referer = "$mainUrl/"
                             quality = qualityFromName(label)
-                            headers = mapOf("Referer" to streamPage, "User-Agent" to USER_AGENT)
+                            headers = mapOf(
+                                "Referer" to "$mainUrl/",
+                                "Range" to "bytes=0-",
+                                "User-Agent" to USER_AGENT,
+                            )
                         }
                     )
                 } else {
@@ -161,11 +188,14 @@ class NimegamiProvider : MainAPI() {
 
         if (sources.isEmpty() && data.startsWith("http", true)) {
             documentDownloadLinks(data).forEach { link ->
-                if (emitted.add(link)) runCatching { loadExtractor(link, data, subtitleCallback, callback) }
+                if (emitted.add(link)) {
+                    handled = true
+                    runCatching { loadExtractor(link, data, subtitleCallback, callback) }
+                }
             }
         }
 
-        return emitted.isNotEmpty()
+        return handled || emitted.isNotEmpty()
     }
 
     private suspend fun documentDownloadLinks(url: String): List<String> {
