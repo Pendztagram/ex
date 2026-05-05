@@ -199,10 +199,22 @@ class NimegamiProvider : MainAPI() {
             ?: return null
 
         val apiResponse = runCatching {
-            app.get(streamApi, referer = streamPage, headers = mapOf("User-Agent" to USER_AGENT))
+            app.get(
+                streamApi,
+                referer = streamPage,
+                headers = mapOf(
+                    "Accept" to "application/json, text/plain, */*",
+                    "User-Agent" to USER_AGENT,
+                )
+            )
         }.getOrNull() ?: return null
 
-        return tryParseJson<DirectStreamResponse>(apiResponse.text)?.url
+        return (tryParseJson<DirectStreamResponse>(apiResponse.text)?.url
+            ?: Regex(""""url"\s*:\s*"([^"]+)"""")
+                .find(apiResponse.text)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.jsonUrlDecode())
             ?.takeIf { it.isNotBlank() }
     }
 
@@ -211,7 +223,25 @@ class NimegamiProvider : MainAPI() {
         val decoded = runCatching {
             String(Base64.getDecoder().decode(value.trim()))
         }.getOrElse { value }
-        return tryParseJson<List<StreamSource>>(decoded).orEmpty()
+        val parsed = tryParseJson<List<StreamSource>>(decoded).orEmpty()
+        if (parsed.any { !it.url.isNullOrEmpty() }) return parsed
+
+        return Regex("""\{[^{}]*"format"\s*:\s*"([^"]*)"[^{}]*"url"\s*:\s*\[(.*?)]""")
+            .findAll(decoded)
+            .mapNotNull { match ->
+                val urls = Regex(""""([^"]+)"""")
+                    .findAll(match.groupValues[2])
+                    .map { it.groupValues[1].jsonUrlDecode() }
+                    .filter { it.isNotBlank() }
+                    .toList()
+                    .takeIf { it.isNotEmpty() }
+                    ?: return@mapNotNull null
+                StreamSource(
+                    format = match.groupValues[1].ifBlank { null },
+                    url = urls,
+                )
+            }
+            .toList()
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
