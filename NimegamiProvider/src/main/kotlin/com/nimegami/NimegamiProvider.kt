@@ -180,7 +180,7 @@ class NimegamiProvider : MainAPI() {
             app.get(streamPage, referer = "$mainUrl/", headers = mapOf("User-Agent" to USER_AGENT))
         }.getOrNull() ?: return null
         val html = response.text
-        return listOf("stream_url", "hls_url", "stream_hls", "stream_m3u8", "direct_url")
+        val preloadUrl = listOf("stream_url", "hls_url", "stream_hls", "stream_m3u8", "direct_url")
             .firstNotNullOfOrNull { key ->
                 Regex(""""$key"\s*:\s*"([^"]+)"""").find(html)
                     ?.groupValues
@@ -188,6 +188,22 @@ class NimegamiProvider : MainAPI() {
                     ?.jsonUrlDecode()
                     ?.takeIf { it.isNotBlank() }
             }
+        if (preloadUrl != null) return preloadUrl
+
+        val streamApi = Regex("""STREAM_URL_API\s*=\s*["']([^"']+)["']""")
+            .find(html)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.jsonUrlDecode()
+            ?.let { normalizeUrl(it, streamPage) }
+            ?: return null
+
+        val apiResponse = runCatching {
+            app.get(streamApi, referer = streamPage, headers = mapOf("User-Agent" to USER_AGENT))
+        }.getOrNull() ?: return null
+
+        return tryParseJson<DirectStreamResponse>(apiResponse.text)?.url
+            ?.takeIf { it.isNotBlank() }
     }
 
     private fun decodeEpisodeSources(value: String): List<StreamSource> {
@@ -338,5 +354,10 @@ class NimegamiProvider : MainAPI() {
     data class StreamSource(
         val format: String? = null,
         val url: List<String>? = null,
+    )
+
+    data class DirectStreamResponse(
+        val ok: Boolean? = null,
+        val url: String? = null,
     )
 }
