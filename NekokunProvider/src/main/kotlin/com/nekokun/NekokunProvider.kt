@@ -23,8 +23,8 @@ class NekokunProvider : MainAPI() {
     override val mainPage = mainPageOf(
         "$mainUrl/page/%d/" to "Rilisan Terbaru",
         "$mainUrl/anime/?page=%d" to "Anime Lists",
-        "$mainUrl/movies/?page=%d" to "Movie",
-        "$mainUrl/live-action/?page=%d" to "Live Action",
+        "$mainUrl/anime/?page=%d&type=movie&sub=&order=update" to "Movie",
+        "$mainUrl/anime/?page=%d&type=live+action&sub=&order=update" to "Live Action",
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -263,12 +263,18 @@ class NekokunProvider : MainAPI() {
     }
 
     private fun Document.extractSynopsis(): String? {
-        val synopsisElement = selectFirst(
-            ".bixbox.synp .entry-content, " +
-                ".entry-content[itemprop=description], " +
-                ".bigcontent .desc, " +
-                ".info-content .desc"
-        ) ?: return null
+        val synopsisElement = listOf(
+            ".bixbox.synp .entry-content",
+            ".entry-content[itemprop=description]",
+            ".single-info .info-content .desc",
+            ".single-info .desc",
+            ".info-content .desc",
+            ".bigcontent .desc",
+        ).firstNotNullOfOrNull { selector ->
+            selectFirst(selector)?.takeIf { element ->
+                element.text().isUsefulSynopsis()
+            }
+        } ?: return null
         synopsisElement.select("script, style").remove()
         return synopsisElement.text()
             .replace(Regex("""\s+"""), " ")
@@ -276,10 +282,17 @@ class NekokunProvider : MainAPI() {
             .ifBlank { null }
     }
 
+    private fun String.isUsefulSynopsis(): Boolean {
+        val clean = replace(Regex("""\s+"""), " ").trim()
+        if (clean.length < 30) return false
+        return !clean.startsWith("Tonton streaming", true) &&
+            !clean.startsWith("nonton ", true)
+    }
+
     private fun getType(typeLabel: String?, url: String): TvType {
         val value = typeLabel.orEmpty()
         return when {
-            value.contains("movie", true) || url.contains("/movies/", true) -> TvType.AnimeMovie
+            value.contains("movie", true) || url.contains("type=movie", true) -> TvType.AnimeMovie
             value.contains("ova", true) || value.contains("special", true) -> TvType.OVA
             else -> TvType.Anime
         }
