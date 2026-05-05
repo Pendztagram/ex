@@ -910,25 +910,6 @@
         "name": "Pmsm"
     },
     {
-        "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://www.rbtvplus18.xyz&size=%size%",
-        "fileHash": "sha256-713fd7dd82c9c27ace69eb01158179be4984ba2ad32af80f77c3807fc293d94b",
-        "apiVersion": 1,
-        "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 23843,
-        "status": 1,
-        "language": "id",
-        "authors": [
-            "duro92"
-        ],
-        "tvTypes": [
-            "Live"
-        ],
-        "version": 1,
-        "internalName": "RBTVPlusProvider",
-        "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/RBTVPlusProvider.cs3",
-        "name": "RBTVPlusProvider"
-    },
-    {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://v1.samehadaku.how&size=%size%",
         "fileHash": "sha256-7c6ecee00e6e308efc5ee774d10b0d375b2b84f7540687906c0b48b0745e0845",
         "apiVersion": 1,
