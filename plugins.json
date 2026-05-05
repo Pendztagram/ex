@@ -740,10 +740,10 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://nimegami.id&size=%size%",
-        "fileHash": "sha256-e820392b01d9b95cb19d74e57f9c4b7e6d71f33a4f29cf95de045d0a18fc0847",
+        "fileHash": "sha256-3f3901a98581774870cd351f56c90cacdad7863e2dce3bcc244c4d93b529ba2a",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 35805,
+        "fileSize": 35817,
         "status": 1,
         "language": "id",
         "authors": [
