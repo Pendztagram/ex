@@ -16,7 +16,7 @@ import java.util.Base64
 
 class NimegamiProvider : MainAPI() {
     override var mainUrl = "https://nimegami.id"
-    override var name = "Nimegami"
+    override var name = "Nimegami🥶"
     override var lang = "id"
     override val hasMainPage = true
     override val hasDownloadSupport = true
