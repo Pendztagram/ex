@@ -317,10 +317,10 @@ class NimegamiProvider : MainAPI() {
                 ?.getOrNull(1)
                 ?.toDoubleOrNull()
 
-        return newEpisode(data) {
+        return this@NimegamiProvider.newEpisode(data, {
             name = rawTitle.ifBlank { "Episode ${epNum ?: "?"}" }
             episode = epNum?.toInt()
-        }
+        }, false)
     }
 
     private fun detailValue(document: Document, label: String): String? {
