@@ -28,14 +28,7 @@ class NekokunProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = if (page == 1) {
-            request.data
-                .replace("/page/%d/", "/")
-                .replace("?page=%d", "")
-                .replace("%d", "1")
-        } else {
-            request.data.format(page)
-        }
+        val url = buildPageUrl(request.data, page)
         val document = app.get(url, referer = "$mainUrl/").document
         val items = document.select("div.listupd article.bs, article.bs, div.bsx, .serieslist li")
             .mapNotNull { it.toSearchResult() }
@@ -43,6 +36,13 @@ class NekokunProvider : MainAPI() {
 
         val hasNext = document.select("a.next, .hpage a.r, .pagination a.next, a[rel=next]").isNotEmpty()
         return newHomePageResponse(request.name, items, hasNext = hasNext)
+    }
+
+    private fun buildPageUrl(pattern: String, page: Int): String {
+        return when {
+            page == 1 && pattern.contains("/page/%d/") -> pattern.replace("/page/%d/", "/")
+            else -> pattern.format(page)
+        }
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
