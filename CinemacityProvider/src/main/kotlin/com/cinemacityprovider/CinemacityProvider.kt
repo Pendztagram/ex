@@ -391,28 +391,6 @@ class CinemacityProvider : MainAPI() {
         val obj = if (trimmed.startsWith("{")) JSONObject(trimmed) else null
         val pageUrl = obj?.optString("pageUrl")?.takeIf { it.isNotBlank() }
 
-        pageUrl?.let { basePage ->
-            resolveRuntimeMediaUrl(basePage)?.let { runtimeUrl ->
-                callback(
-                    newExtractorLink(
-                        name,
-                        if (runtimeUrl.contains(".m3u8", true)) "$name HLS" else name,
-                        runtimeUrl,
-                        if (runtimeUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                    ) {
-                        referer = basePage
-                        headers = requestHeaders + mapOf("Referer" to basePage)
-                        quality = extractQuality(runtimeUrl)
-                    }
-                )
-                return true
-            }
-        }
-
-        obj?.optJSONArray("sizeEntries")?.takeIf { it.length() > 0 }?.let { entries ->
-            return emitSizeEntryLinks(pageUrl ?: mainUrl, entries, callback)
-        }
-
         val rawFile = obj?.optString("file").orEmpty()
         if (rawFile.isNotBlank()) {
             val baseUrl = pageUrl ?: mainUrl
@@ -430,6 +408,28 @@ class CinemacityProvider : MainAPI() {
                 }
                 if (ok) return true
             }
+        }
+
+        pageUrl?.let { basePage ->
+            resolveRuntimeMediaUrl(basePage)?.let { runtimeUrl ->
+                callback(
+                    newExtractorLink(
+                        name,
+                        "$name HLS",
+                        runtimeUrl,
+                        ExtractorLinkType.M3U8
+                    ) {
+                        referer = basePage
+                        headers = requestHeaders + mapOf("Referer" to basePage)
+                        quality = extractQuality(runtimeUrl)
+                    }
+                )
+                return true
+            }
+        }
+
+        obj?.optJSONArray("sizeEntries")?.takeIf { it.length() > 0 }?.let { entries ->
+            return emitSizeEntryLinks(pageUrl ?: mainUrl, entries, callback)
         }
 
         obj?.optJSONArray("subtitleTracks")?.let { subs ->
@@ -526,57 +526,12 @@ class CinemacityProvider : MainAPI() {
             emitted = true
         }
 
-        val audios = rels.filter {
-            it.endsWith(".m4a", true) && !it.endsWith(".urlset/master.m3u8", true)
-        }.mapNotNull { path ->
-            val key = Regex("""_([^_/]+)\.m4a$""", RegexOption.IGNORE_CASE)
-                .find(path)?.groupValues?.getOrNull(1) ?: return@mapNotNull null
-            Triple(key, titleCase(key), path)
-        }.distinctBy { it.third }
-
-        val videos = rels.filter {
-            it.endsWith(".mp4", true) && !it.endsWith(".urlset/master.m3u8", true)
-        }.map { path ->
-            val res = Regex("""_(\d{3,4}p)\.mp4$""", RegexOption.IGNORE_CASE)
-                .find(path)?.groupValues?.getOrNull(1)?.lowercase() ?: "mp4"
-            res to path
-        }.distinctBy { it.second }
-
-        for ((_, langLabel, audioPath) in audios) {
-            for ((res, videoPath) in videos) {
-                val directVideoUrl = resolveMediaUrl(base, videoPath)
-                callback(
-                    newExtractorLink(name, "$name $res $langLabel", directVideoUrl, ExtractorLinkType.VIDEO) {
-                        referer = fallbackBaseUrl
-                        headers = requestHeaders + mapOf("Referer" to fallbackBaseUrl)
-                        quality = extractQuality(videoPath)
-                    }
-                )
-                emitted = true
-            }
-        }
-
-        if (emitted) return true
-
-        for ((_, langLabel, audioPath) in audios) {
-            for ((res, videoPath) in videos) {
-                val href = buildDownloadHref(base, videoPath, audioPath, subtitles.map { it.first })
-                callback(
-                    newExtractorLink(name, "$name Download $res $langLabel", href, INFER_TYPE) {
-                        referer = fallbackBaseUrl
-                        headers = requestHeaders + mapOf("Referer" to fallbackBaseUrl)
-                        quality = extractQuality(videoPath)
-                    }
-                )
-                emitted = true
-            }
-        }
         return emitted
     }
 
     private suspend fun resolveRuntimeMediaUrl(pageUrl: String): String? {
         val watchUrl = if (pageUrl.contains("#")) pageUrl else "$pageUrl#watch"
-        val mediaRegex = Regex("""https?://[^"'\\s]+(?:\.m3u8|\.mp4)[^"'\\s]*""", RegexOption.IGNORE_CASE)
+        val mediaRegex = Regex("""https?://[^"'\\s]+\.m3u8[^"'\\s]*""", RegexOption.IGNORE_CASE)
 
         val resolved = runCatching {
             app.get(
@@ -587,7 +542,6 @@ class CinemacityProvider : MainAPI() {
                     interceptUrl = mediaRegex,
                     additionalUrls = listOf(
                         Regex("""https?://[^"'\\s]+\.m3u8[^"'\\s]*""", RegexOption.IGNORE_CASE),
-                        Regex("""https?://[^"'\\s]+\.mp4[^"'\\s]*""", RegexOption.IGNORE_CASE),
                     ),
                     useOkhttp = false,
                     timeout = 25_000L
@@ -598,6 +552,7 @@ class CinemacityProvider : MainAPI() {
         val normalizedPageUrl = pageUrl.substringBefore('#')
         return resolved.takeIf {
             it.startsWith("http", true) &&
+                it.contains(".m3u8", true) &&
                 it != normalizedPageUrl &&
                 !it.contains("/movies/", true) &&
                 !it.contains("/tv-series/", true)
@@ -605,52 +560,11 @@ class CinemacityProvider : MainAPI() {
     }
 
     private suspend fun emitSizeEntryLinks(
-        pageUrl: String,
-        entries: JSONArray,
-        callback: (ExtractorLink) -> Unit
+        _pageUrl: String,
+        _entries: JSONArray,
+        _callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val rawEntries = buildList {
-            for (i in 0 until entries.length()) {
-                entries.optString(i).takeIf { it.isNotBlank() }?.let(::add)
-            }
-        }
-        if (rawEntries.isEmpty()) return false
-
-        val audios = rawEntries
-            .filter { it.endsWith(".m4a", true) }
-            .mapNotNull { path ->
-                val key = Regex("""_([^_/]+)\.m4a$""", RegexOption.IGNORE_CASE)
-                    .find(path)?.groupValues?.getOrNull(1) ?: return@mapNotNull null
-                Triple(key, titleCase(key), path)
-            }
-            .distinctBy { it.third }
-
-        val videos = rawEntries
-            .filter { it.endsWith(".mp4", true) }
-            .map { path ->
-                val res = Regex("""_(\d{3,4}p)\.mp4$""", RegexOption.IGNORE_CASE)
-                    .find(path)?.groupValues?.getOrNull(1)?.lowercase() ?: "mp4"
-                res to path
-            }
-            .distinctBy { it.second }
-
-        if (audios.isEmpty() || videos.isEmpty()) return false
-
-        var emitted = false
-        for ((_, langLabel, audioPath) in audios) {
-            for ((res, videoPath) in videos) {
-                val href = buildDownloadHref(pageUrl, videoPath, audioPath, emptyList())
-                callback(
-                    newExtractorLink(name, "$name Download $res $langLabel", href, INFER_TYPE) {
-                        referer = pageUrl
-                        headers = requestHeaders + mapOf("Referer" to pageUrl)
-                        quality = extractQuality(videoPath)
-                    }
-                )
-                emitted = true
-            }
-        }
-        return emitted
+        return false
     }
 
     private suspend fun extractSizeEntries(pageUrl: String, html: String): List<String> {
@@ -704,30 +618,6 @@ class CinemacityProvider : MainAPI() {
         }
 
         return fixUrl("/$cleanPath")
-    }
-
-    private fun buildDownloadHref(
-        base: String,
-        videoPath: String,
-        audioPath: String,
-        subtitlePaths: List<String>
-    ): String {
-        val separator = if (base.contains("?")) "&" else "?"
-        val subtitleParam = subtitlePaths.joinToString(",").takeIf { it.isNotBlank() }
-        return buildString {
-            append(fixUrl(base))
-            append(separator)
-            append("action=download&video=")
-            append(URLEncoder.encode(videoPath, StandardCharsets.UTF_8.toString()))
-            append("&audio=")
-            append(URLEncoder.encode(audioPath, StandardCharsets.UTF_8.toString()))
-            if (!subtitleParam.isNullOrBlank()) {
-                append("&subtitle=")
-                append(URLEncoder.encode(subtitleParam, StandardCharsets.UTF_8.toString()))
-            }
-            append("&name=")
-            append(URLEncoder.encode("cinemacity", StandardCharsets.UTF_8.toString()))
-        }
     }
 
     private fun parseSubtitlePaths(raw: String?): List<Pair<String, Pair<String, String>>> {

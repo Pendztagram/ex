@@ -1,4 +1,4 @@
-version = 6
+version = 7
 
 cloudstream {
     description = "Watch Movies & TvSeries (Multi-Lang/Audio)"
