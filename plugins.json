@@ -237,6 +237,28 @@
         "name": "Dramabox"
     },
     {
+        "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://www.dubbindo.site&size=%size%",
+        "fileHash": "sha256-1ed52a9614b5aa344d9363e2a3dd401b6a8f58d7ee85e07a1b68f3056ac2c7bd",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/Pendztagram/ex",
+        "fileSize": 15745,
+        "status": 1,
+        "language": "id",
+        "authors": [
+            "duro92"
+        ],
+        "tvTypes": [
+            "Movie",
+            "TvSeries",
+            "AnimeMovie",
+            "Anime"
+        ],
+        "version": 1,
+        "internalName": "DubbindoProvider",
+        "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/DubbindoProvider.cs3",
+        "name": "DubbindoProvider"
+    },
+    {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://justilien.com&size=%size%",
         "fileHash": "sha256-9827f4a515f5c1c84e41e9fb2867e7c170be064f54ab12511fcbcb5fa4a0c62a",
         "apiVersion": 1,
