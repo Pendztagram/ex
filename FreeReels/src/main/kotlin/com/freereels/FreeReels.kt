@@ -187,18 +187,62 @@ class FreeReels : MainAPI() {
                     showStatus = detail.finishStatus.toShowStatus()
                 }
             }
+
+            if (localTitle != null || localPoster != null || localPlot != null || !localTags.isNullOrEmpty()) {
+                val fallbackTags = localTags ?: detail.allTags()
+                return newTvSeriesLoadResponse(
+                    title,
+                    buildSeriesUrl(seriesKey, title, detail.cover ?: localPoster, localPlot ?: detail.desc, fallbackTags),
+                    TvType.AsianDrama,
+                    emptyList()
+                ) {
+                    posterUrl = detail.cover ?: localPoster
+                    plot = localPlot ?: detail.desc
+                    tags = fallbackTags
+                    showStatus = detail.finishStatus.toShowStatus() ?: ShowStatus.Ongoing
+                }
+            }
         }
 
         val fallbackEpisode = nativeItem?.episodeInfo
             ?.takeIf { it.hasPlayableSource() }
-            ?: throw ErrorLoadingException("Detail FreeReels tidak ditemukan")
+        if (fallbackEpisode == null) {
+            val fallbackTitle = localTitle
+                ?: nativeItem?.title?.takeIf { it.isNotBlank() }
+                ?: "FreeReels"
+            val fallbackPlot = localPlot ?: nativeItem?.desc
+            val fallbackPoster = nativeItem?.cover ?: localPoster
+            val fallbackTags = localTags ?: nativeItem?.allTags().orEmpty()
+
+            if (
+                localTitle != null ||
+                localPoster != null ||
+                localPlot != null ||
+                !localTags.isNullOrEmpty() ||
+                nativeItem != null
+            ) {
+                return newTvSeriesLoadResponse(
+                    fallbackTitle,
+                    buildSeriesUrl(seriesKey, fallbackTitle, fallbackPoster, fallbackPlot, fallbackTags),
+                    TvType.AsianDrama,
+                    emptyList()
+                ) {
+                    posterUrl = fallbackPoster
+                    plot = fallbackPlot
+                    tags = fallbackTags
+                    showStatus = ShowStatus.Ongoing
+                }
+            }
+
+            throw ErrorLoadingException("Detail FreeReels tidak ditemukan")
+        }
         val fallbackTitle = localTitle
-            ?: nativeItem?.title?.takeIf { it.isNotBlank() }
+            ?: nativeItem.title?.takeIf { it.isNotBlank() }
             ?: fallbackEpisode.name?.takeIf { it.isNotBlank() }
             ?: "FreeReels"
-        val fallbackPlot = localPlot ?: nativeItem?.desc
-        val fallbackPoster = fallbackEpisode.cover ?: nativeItem?.cover ?: localPoster
-        val fallbackTags = localTags ?: nativeItem?.allTags().orEmpty()
+        val fallbackPlot = localPlot ?: nativeItem.desc
+        val fallbackPoster = fallbackEpisode.cover ?: nativeItem.cover ?: localPoster
+        val fallbackTags = localTags ?: nativeItem.allTags()
         val fallbackEpisodeNumber = fallbackEpisode.index ?: 1
         val fallbackEpisodeName = fallbackEpisode.name
             ?.takeIf { it.isNotBlank() && !it.equals(fallbackTitle, true) }
