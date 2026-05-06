@@ -103,17 +103,31 @@ class DubbindoProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data, referer = "$mainUrl/").document
-        val links = document.select("video source[src], video[src]")
-            .mapNotNull { source ->
-                val url = source.attr("abs:src").ifBlank { source.attr("src") }.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+        val links = linkedMapOf<String, String>()
+
+        document.select("video source[src], video[src], .download-placement a[href], a[href*='.mp4'], a[href*='.m3u8']")
+            .forEach { source ->
+                val url = source.attr("abs:src")
+                    .ifBlank { source.attr("abs:href") }
+                    .ifBlank { source.attr("src") }
+                    .ifBlank { source.attr("href") }
+                    .takeIf { it.isNotBlank() }
+                    ?.let(::fixUrl)
+                    ?: return@forEach
+                if (!isMediaUrl(url)) return@forEach
+
                 val label = source.attr("label")
                     .ifBlank { source.attr("title") }
                     .ifBlank { source.attr("data-quality") }
                     .ifBlank { source.attr("res").takeIf { it.isNotBlank() }?.let { "${it}p" }.orEmpty() }
-                    .ifBlank { "MP4" }
-                fixUrl(url) to label
+                    .ifBlank { source.text().trim() }
+                    .ifBlank { labelFromUrl(url) }
+                links[url] = label
             }
-            .distinctBy { it.first }
+
+        extractMediaFromHtml(document.html()).forEach { url ->
+            links.putIfAbsent(url, labelFromUrl(url))
+        }
 
         links.forEach { (url, label) ->
             callback(
@@ -197,6 +211,26 @@ class DubbindoProvider : MainAPI() {
             ?.value
             ?.toIntOrNull()
             ?: Qualities.Unknown.value
+    }
+
+    private fun extractMediaFromHtml(html: String): List<String> {
+        return Regex("""https?://[^\s"'<>\\]+?\.(?:mp4|m3u8)(?:[^\s"'<>\\]*)?""", RegexOption.IGNORE_CASE)
+            .findAll(html.replace("\\/", "/").replace("&amp;", "&"))
+            .map { it.value.trimEnd(',', ')', ']') }
+            .filter(::isMediaUrl)
+            .distinct()
+            .toList()
+    }
+
+    private fun isMediaUrl(url: String): Boolean {
+        return Regex("""(?i)\.(mp4|m3u8)(?:$|[?#&])""").containsMatchIn(url)
+    }
+
+    private fun labelFromUrl(url: String): String {
+        return Regex("""(?i)(2160|1440|1080|720|480|360|240)p""")
+            .find(url)
+            ?.value
+            ?: if (url.contains(".m3u8", true)) "HLS" else "MP4"
     }
 
     private fun extractYear(value: String): Int? {
