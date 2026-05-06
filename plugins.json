@@ -173,10 +173,10 @@
     },
     {
         "iconUrl": "https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/Icons/Cinemacity.png",
-        "fileHash": "sha256-364e157f8a89585127a1c927b9ae25fe310c6ecb9fccae12a41532591ae71acb",
+        "fileHash": "sha256-16b868c19965faec57112ddb0069061a0475cf74afd5aa33283afbdbc107f6b9",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 60735,
+        "fileSize": 55046,
         "status": 1,
         "language": "en",
         "authors": [
@@ -186,7 +186,7 @@
             "Movie",
             "TvSeries"
         ],
-        "version": 6,
+        "version": 7,
         "internalName": "CinemacityProvider",
         "description": "Watch Movies & TvSeries (Multi-Lang/Audio)",
         "url": "https://raw.githubusercontent.com/Pendztagram/ex/builds/CinemacityProvider.cs3",
