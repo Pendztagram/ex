@@ -127,7 +127,6 @@ open class SoraStream(val sharedPref: SharedPreferences? = null) : TmdbProvider(
 
         val sourceRegistry = listOf(
             SourceDescriptor("vidsrccc", SourceGroup.CORE, 10),
-            SourceDescriptor("vidsrc", SourceGroup.CORE, 20),
             SourceDescriptor("vidsrcme", SourceGroup.CORE, 25),
             SourceDescriptor("vidlink", SourceGroup.CORE, 30),
             SourceDescriptor("vidfast", SourceGroup.CORE, 40),
@@ -458,15 +457,6 @@ open class SoraStream(val sharedPref: SharedPreferences? = null) : TmdbProvider(
     ) {
         when (source.key) {
             "vidsrccc" -> invokeVidsrccc(
-                res.id,
-                res.imdbId,
-                res.season,
-                res.episode,
-                subtitleCallback,
-                callback
-            )
-
-            "vidsrc" -> invokeVidsrc(
                 res.id,
                 res.imdbId,
                 res.season,
