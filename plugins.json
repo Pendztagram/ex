@@ -305,10 +305,10 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://free-reels.com&size=%size%",
-        "fileHash": "sha256-4a4b75d715b0d96ba28c43d68954b7d898d39591bdaf79f47440030b6a6b6dc6",
+        "fileHash": "sha256-2b90ccc5f0be43331f8bdb4b14135a52d2c0d5540796b1a1a56fb3fc574eb26b",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 70232,
+        "fileSize": 71370,
         "status": 1,
         "language": "id",
         "authors": [
