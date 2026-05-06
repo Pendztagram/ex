@@ -48,9 +48,7 @@ class DubbindoProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get(request.data.format(page), referer = "$mainUrl/").document
-        val items = document.select(".video-list, .related-video-wrapper")
-            .mapNotNull { it.toSearchResult() }
-            .distinctBy { it.url }
+        val items = document.toSearchResults()
 
         val hasNext = document.select("a[title='Next Page'], ul.pagination a[href*='page_id=${page + 1}']").isNotEmpty()
         return newHomePageResponse(request.name, items, hasNext = hasNext)
@@ -59,9 +57,7 @@ class DubbindoProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val encoded = URLEncoder.encode(query.trim(), "UTF-8")
         val document = app.get("$mainUrl/search?keyword=$encoded", referer = "$mainUrl/").document
-        return document.select(".video-list, .related-video-wrapper")
-            .mapNotNull { it.toSearchResult() }
-            .distinctBy { it.url }
+        return document.toSearchResults()
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -87,10 +83,8 @@ class DubbindoProvider : MainAPI() {
 
         val category = document.selectFirst(".video-category a, a[href*='/videos/category/']")?.text()?.trim()
         val type = getType(category, title)
-        val recommendations = document.select(".related-video-wrapper, .video-list")
-            .mapNotNull { it.toSearchResult() }
+        val recommendations = document.toSearchResults()
             .filterNot { it.url == fixedUrl }
-            .distinctBy { it.url }
 
         return newMovieLoadResponse(title, fixedUrl, type, fixedUrl) {
             posterUrl = poster
@@ -142,23 +136,34 @@ class DubbindoProvider : MainAPI() {
         return links.isNotEmpty()
     }
 
-    private fun Element.toSearchResult(): SearchResponse? {
-        val link = selectFirst("a[href*='/watch/']") ?: return null
+    private fun Document.toSearchResults(): List<SearchResponse> {
+        return select("a[href*='/watch/']")
+            .mapNotNull { it.toSearchResultFromLink() }
+            .distinctBy { it.url }
+    }
+
+    private fun Element.toSearchResultFromLink(): SearchResponse? {
+        val link = this
         val href = link.attr("abs:href").ifBlank { link.attr("href") }.takeIf { it.isNotBlank() }?.let(::fixUrl) ?: return null
         if (!href.contains("/watch/", true)) return null
+        val card = parents().firstOrNull { parent ->
+            parent.`is`(".video-list, .video-wrapper, .video-latest-list, .related-video-wrapper, [data-id], [data-sidebar-video]")
+        } ?: parent() ?: this
 
         val title = listOf(
-            selectFirst("h4[title]")?.attr("title"),
-            selectFirst(".video-title a, .video-list-title h4, h4")?.text(),
-            selectFirst("img[alt]")?.attr("alt"),
+            link.selectFirst("h4[title]")?.attr("title"),
+            link.selectFirst("h4")?.text(),
+            card.selectFirst("h4[title]")?.attr("title"),
+            card.selectFirst(".video-title a, .video-list-title h4, h4")?.text(),
+            card.selectFirst("img[alt]")?.attr("alt"),
             link.attr("title"),
             link.text(),
         ).firstOrNull { !it.isNullOrBlank() }
             ?.cleanTitle()
             ?: return null
 
-        val poster = selectFirst("img")?.imageUrl()
-        val category = selectFirst(".video-category a, a[href*='/videos/category/']")?.text()?.trim()
+        val poster = card.selectFirst("img")?.imageUrl()
+        val category = card.selectFirst(".video-category a, a[href*='/videos/category/']")?.text()?.trim()
 
         return newMovieSearchResponse(title, href, getType(category, title)) {
             posterUrl = poster
