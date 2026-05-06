@@ -238,10 +238,10 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://www.dubbindo.site&size=%size%",
-        "fileHash": "sha256-9bff3d969b5d8cf1ddd256b138d1b6a45a94e3e1b6b8c1f27d4f1a9a40972afc",
+        "fileHash": "sha256-0dc4ee23709252d9a8a5305a348e8b5fd83b679453882e5340bd8e03c51aff3f",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 15449,
+        "fileSize": 16712,
         "status": 1,
         "language": "id",
         "authors": [
