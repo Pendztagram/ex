@@ -24,10 +24,10 @@ import java.net.URLEncoder
 
 class DubbindoProvider : MainAPI() {
     override var mainUrl = "https://www.dubbindo.site"
-    override var name = "Dubbindo"
+    override var name = "Dubbindo🤐"
     override var lang = "id"
     override val hasMainPage = true
-    override val hasDownloadSupport = false
+    override val hasDownloadSupport = true
 
     override val supportedTypes = setOf(
         TvType.Movie,
