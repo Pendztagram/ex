@@ -407,6 +407,23 @@ object SoraExtractor : SoraStream() {
 
         val res = app.get("$api/prorcp/$hash", referer = "$api/").text
         val m3u8Link = Regex("""https:.*?\.m3u8[^"'\\\s]*""").find(res)?.value ?: return
+        val streamHeaders = mapOf(
+            "Accept" to "*/*",
+            "Referer" to "$api/",
+            "Origin" to api,
+            "User-Agent" to USER_AGENT,
+        )
+
+        val generatedLinks = M3u8Helper.generateM3u8(
+            "Vidsrc",
+            m3u8Link,
+            "$api/",
+            headers = streamHeaders,
+        )
+        if (generatedLinks.isNotEmpty()) {
+            generatedLinks.forEach(callback)
+            return
+        }
 
         callback.invoke(
             newExtractorLink(
@@ -416,6 +433,7 @@ object SoraExtractor : SoraStream() {
                 ExtractorLinkType.M3U8
             ) {
                 this.referer = "$api/"
+                this.headers = streamHeaders
             }
         )
 
@@ -1773,7 +1791,7 @@ object SoraExtractor : SoraStream() {
         val xpsUrl = Regex("""https://streamsrcs\.2embed\.cc/xps(?:-tv)?\?[^'"\s<]+""", RegexOption.IGNORE_CASE)
             .find(twoEmbedResponse.text)
             ?.value
-            ?: return false
+            ?: return loadCurrent2EmbedVidsrc(twoEmbedResponse, isTv, browserHeaders, callback)
         val xpsResponse = app.get(xpsUrl, referer = "${getBaseUrl(twoEmbedResponse.url)}/", headers = browserHeaders)
         val xpassSlug = xpsResponse.document.selectFirst("iframe#framesrc")?.attr("src")?.trim()
             ?.takeIf { it.isNotBlank() }
@@ -1817,6 +1835,46 @@ object SoraExtractor : SoraStream() {
         if (generatedLinks.isEmpty()) return false
         generatedLinks.forEach(callback)
         return true
+    }
+
+    private suspend fun loadCurrent2EmbedVidsrc(
+        twoEmbedResponse: NiceResponse,
+        isTv: Boolean,
+        browserHeaders: Map<String, String>,
+        callback: (ExtractorLink) -> Unit,
+    ): Boolean {
+        val streamsrcUrl = twoEmbedResponse.document.selectFirst("iframe#iframesrc")?.let { iframe ->
+            iframe.attr("data-src").ifBlank { iframe.attr("src") }
+        }?.trim()
+            ?.takeIf { it.isNotBlank() && !it.equals("about:blank", ignoreCase = true) }
+            ?.let { fixUrl(it, getBaseUrl(twoEmbedResponse.url)) }
+            ?: Regex(
+                """https://streamsrcs\.2embed\.cc/vsrcc(?:-tv)?\?[^'"\s<]+""",
+                RegexOption.IGNORE_CASE,
+            ).find(twoEmbedResponse.text)?.value
+            ?: return false
+
+        val streamsrcResponse = app.get(
+            streamsrcUrl,
+            referer = "${getBaseUrl(twoEmbedResponse.url)}/",
+            headers = browserHeaders,
+        )
+        val frameSrc = streamsrcResponse.document.selectFirst("iframe#framesrc")?.attr("src")?.trim()
+            ?.takeIf { it.isNotBlank() && !it.equals("about:blank", ignoreCase = true) }
+            ?: return false
+        val vidsrcCcUrl = when {
+            frameSrc.startsWith("http", ignoreCase = true) -> frameSrc
+            else -> "$vidsrcccAPI/v2/embed/${if (isTv) "tv" else "movie"}/${frameSrc.removePrefix("/")}"
+        }
+
+        return invokeWebviewEmbedSource(
+            "VidSrc",
+            vidsrcCcUrl,
+            "$vidsrcccAPI/",
+            vidsrcccAPI,
+            callback,
+            useOkhttp = false,
+        )
     }
 
     private fun extractPlayableUrlFromHtml(
