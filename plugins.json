@@ -695,10 +695,10 @@
     },
     {
         "iconUrl": "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://nekokun.my.id&size=%size%",
-        "fileHash": "sha256-f51ac959e1349373ceace7eead2a352b0178cfb69abe107431227069e3b1a029",
+        "fileHash": "sha256-1f714c139783e6b74a0fd2efe66eb6bc7fb626e754c3c31e7113a95fc75e987b",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/Pendztagram/ex",
-        "fileSize": 29787,
+        "fileSize": 29816,
         "status": 1,
         "language": "id",
         "authors": [
